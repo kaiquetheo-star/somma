@@ -81,9 +81,13 @@ export default function CombatModeScreen() {
 
     return rounds.flatMap((round) => {
       const focusPool = filterCombatByTacticalFocus(eligible, round.tactical_focus);
+      // Fall back to the full eligible pool when no combos match the tactical focus,
+      // then to the full catalog, so every round in the prescription gets a combo
+      // rather than being silently dropped.
+      const pool = focusPool.length > 0 ? focusPool : eligible.length > 0 ? eligible : catalog;
       const combo =
         getCombatComboById(catalog, round.combo_id) ??
-        focusPool[round.round_index % focusPool.length];
+        (pool.length > 0 ? pool[round.round_index % pool.length] : null);
       if (!combo) return [];
       return [
         {
@@ -137,7 +141,8 @@ export default function CombatModeScreen() {
   }));
 
   const activeTacticalFocus = useMemo(() => {
-    const round = activeBlock?.combat?.rounds?.find((r) => r.round_index === currentRound);
+    // round_index is 0-based in the prescription; currentRound is 1-based in the hook.
+    const round = activeBlock?.combat?.rounds?.find((r) => r.round_index === currentRound - 1);
     return round?.tactical_focus ?? roundSchedule?.[currentRound - 1]?.tacticalFocus;
   }, [activeBlock?.combat?.rounds, currentRound, roundSchedule]);
 

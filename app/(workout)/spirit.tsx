@@ -1,7 +1,7 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -215,6 +215,31 @@ export default function SpiritModeScreen() {
             </Pressable>
           ) : null}
 
+          {/*
+            Idle state: map over the full asanas sequence so the user can preview
+            every pose before entering the sanctuary. A horizontal scroll strip
+            shows name and hold duration for each step in the routine.
+          */}
+          {showFlowIdle ? (
+            <View style={styles.idleSequence}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.idleSequenceContent}
+              >
+                {flowAsanas.map((pose, idx) => (
+                  <View key={pose.asana_id} style={styles.posePill}>
+                    <Text style={styles.posePillNum}>{idx + 1}</Text>
+                    <Text style={styles.posePillName} numberOfLines={2}>
+                      {pose.name}
+                    </Text>
+                    <Text style={styles.posePillHold}>{pose.hold_seconds}s</Text>
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          ) : null}
+
           {!isFlowMode && breathEngine.status === 'idle' ? (
             <Pressable onPress={breathEngine.start} style={styles.enterSanctuary}>
               <Text style={styles.enterLabel}>
@@ -248,6 +273,21 @@ export default function SpiritModeScreen() {
                     {flowSession.currentIndex + 1} / {flowSession.totalPoses}
                     {flowSession.isLastPose ? ' · final pose' : ''}
                   </Text>
+                  {/*
+                    Progress dots — one pip per pose in the sequence so the user
+                    can see exactly where they are in the full routine at a glance.
+                  */}
+                  <View style={styles.progressDots}>
+                    {flowSession.sortedAsanas.map((_, dotIdx) => (
+                      <View
+                        key={dotIdx}
+                        style={[
+                          styles.progressDot,
+                          dotIdx === flowSession.currentIndex && styles.progressDotActive,
+                        ]}
+                      />
+                    ))}
+                  </View>
                   <Text style={styles.gestureHint}>Tap left · previous · right · next</Text>
                 </>
               ) : (
@@ -325,6 +365,50 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     color: SPIRIT_SANCTUARY.textMuted,
   },
+  // Idle-state horizontal strip mapping the full asana sequence
+  idleSequence: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingBottom: 20,
+    zIndex: 20,
+  },
+  idleSequenceContent: {
+    paddingHorizontal: 20,
+  },
+  posePill: {
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    marginRight: 10,
+    maxWidth: 110,
+  },
+  posePillNum: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 8,
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+    color: SPIRIT_SANCTUARY.textMuted,
+  },
+  posePillName: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    textAlign: 'center',
+    color: SPIRIT_SANCTUARY.textPrimary,
+    marginTop: 4,
+  },
+  posePillHold: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 9,
+    letterSpacing: 1.5,
+    color: SPIRIT_SANCTUARY.textMuted,
+    marginTop: 3,
+  },
   footer: {
     paddingHorizontal: 28,
     paddingBottom: 12,
@@ -351,6 +435,26 @@ const styles = StyleSheet.create({
     letterSpacing: 3,
     textTransform: 'uppercase',
     color: SPIRIT_SANCTUARY.textMuted,
+  },
+  // Sequence progress dots — one per pose, active pip elongated in gold
+  progressDots: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+  },
+  progressDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(107, 117, 104, 0.35)',
+    marginHorizontal: 3,
+  },
+  progressDotActive: {
+    width: 10,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(191, 160, 106, 0.75)',
   },
   gestureHint: {
     marginTop: 14,

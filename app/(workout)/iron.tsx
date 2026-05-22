@@ -171,7 +171,7 @@ export default function IronModeScreen() {
     if (!altId || altId === exercise.exercise_id) {
       Alert.alert(
         'No alternative',
-        'This movement has no pre-mapped swap in today’s protocol. Recalibrate to refresh options.',
+        'This movement has no pre-mapped swap in today's protocol. Recalibrate to refresh options.',
       );
       return;
     }
@@ -297,13 +297,19 @@ export default function IronModeScreen() {
       eyebrow="Iron · Strength"
       title={title ?? 'Iron Mode'}
       accent="obsidian"
-      onComplete={canCompleteRitual ? () => handleCompleteRitual() : undefined}
-      completeDisabled={!canCompleteRitual}
+      onComplete={
+        canCompleteRitual
+          ? () => handleCompleteRitual()
+          : canAdvanceExercise
+            ? advanceToNextExercise
+            : undefined
+      }
+      completeDisabled={!canCompleteRitual && !canAdvanceExercise}
       completeLabel={
         canCompleteRitual
           ? 'Complete Ritual'
           : canAdvanceExercise
-            ? 'Next movement'
+            ? `Next movement · ${exerciseIndex + 2} of ${exerciseQueue.length}`
             : `Log ${totalSets} sets to finish`
       }
     >
@@ -316,109 +322,150 @@ export default function IronModeScreen() {
           />
         ) : null}
 
+        {/*
+          Iterate over the ENTIRE exerciseQueue so the user can scroll through the
+          full routine. Each exercise gets its own ExerciseCueCard. The current
+          exercise also exposes the set-logging controls.
+        */}
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerClassName={`gap-6 ${canLogSet ? 'pb-24' : 'pb-4'}`}
         >
-          <View className="rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4">
-            <View className="flex-row items-start justify-between">
-              <View className="flex-1 pr-3">
-                <Text className="font-body text-[10px] uppercase tracking-[0.35em] text-[#6B7568]">
-                  {exerciseQueue.length > 1
-                    ? `Movement ${exerciseIndex + 1} of ${exerciseQueue.length}`
-                    : 'Prescribed movement'}
-                </Text>
-                <Text className="font-display text-xl text-[#E8E4DC]">{exercise?.name}</Text>
-                <Text className="mt-2 font-body text-sm text-[#8A9488]">
-                  {exercise?.target_rep_range}
-                </Text>
-                <Text className="mt-1 font-body text-[10px] uppercase tracking-[0.25em] text-[#6B7568]">
-                  Set {Math.min(currentSet, totalSets)} of {totalSets}
-                  {exercise?.execution_technique
-                    ? ` · ${exercise.execution_technique}`
-                    : ''}
-                  {` · Rest ${exercise?.rest_seconds ?? DEFAULT_REST_SECONDS}s`}
-                  {phase === 'done' ? ' · Ready to advance' : ''}
-                </Text>
-              </View>
-              <Pressable
-                onPress={handleAdapt}
-                disabled={phase === 'resting' || !canAdapt}
-                className={`rounded-xl border px-3 py-2 active:opacity-80 ${
-                  canAdapt
-                    ? 'border-matte-gold/30 bg-matte-gold/10'
-                    : 'border-white/10 bg-white/5 opacity-40'
+          {exerciseQueue.map((exItem, idx) => {
+            const isCurrent = idx === exerciseIndex;
+            const isPast = idx < exerciseIndex;
+            const exLib = getExerciseById(catalog, exItem.exercise_id);
+            const exBiomechanics = biomechanicsFromLibrary(exLib);
+            const exCanAdapt =
+              isCurrent &&
+              Boolean(exItem.alternative_exercise_id) &&
+              exItem.alternative_exercise_id !== exItem.exercise_id;
+
+            return (
+              <View
+                key={`${exItem.exercise_id}-${idx}`}
+                className={`overflow-hidden rounded-2xl border ${
+                  isCurrent
+                    ? 'border-matte-gold/20 bg-white/[0.05]'
+                    : isPast
+                      ? 'border-white/[0.05] bg-white/[0.02] opacity-50'
+                      : 'border-white/[0.07] bg-white/[0.02]'
                 }`}
               >
-                <Text className="font-body text-[10px] uppercase tracking-[0.2em] text-matte-gold">
-                  Adapt
-                </Text>
-              </Pressable>
-            </View>
-            {canAdapt && activeLibrary ? (
-              <Text className="mt-3 font-body text-xs text-[#6B7568]">
-                Swap ready ·{' '}
-                {getExerciseById(catalog, exercise.alternative_exercise_id!)?.name ?? 'alternative'}
-              </Text>
-            ) : null}
-          </View>
+                {/* Exercise header */}
+                <View className="px-5 py-4">
+                  <View className="flex-row items-start justify-between">
+                    <View className="flex-1 pr-3">
+                      <Text className="font-body text-[10px] uppercase tracking-[0.35em] text-[#6B7568]">
+                        {exerciseQueue.length > 1
+                          ? `Movement ${idx + 1} of ${exerciseQueue.length}`
+                          : 'Prescribed movement'}
+                        {isPast ? ' · Done' : ''}
+                      </Text>
+                      <Text
+                        className={`font-display text-xl ${
+                          isCurrent ? 'text-[#E8E4DC]' : 'text-[#6B7568]'
+                        }`}
+                      >
+                        {exItem.name}
+                      </Text>
+                      <Text className="mt-2 font-body text-sm text-[#8A9488]">
+                        {exItem.target_rep_range}
+                      </Text>
+                      {isCurrent ? (
+                        <Text className="mt-1 font-body text-[10px] uppercase tracking-[0.25em] text-[#6B7568]">
+                          Set {Math.min(currentSet, totalSets)} of {totalSets}
+                          {exItem.execution_technique
+                            ? ` · ${exItem.execution_technique}`
+                            : ''}
+                          {` · Rest ${exItem.rest_seconds ?? DEFAULT_REST_SECONDS}s`}
+                          {phase === 'done' ? ' · Ready to advance' : ''}
+                        </Text>
+                      ) : null}
+                    </View>
 
-          <ExerciseCueCard
-            instructions={exercise?.instructions ?? {}}
-            progressionNote={exercise?.progression_note}
-            biomechanics={biomechanicsFromLibrary(activeLibrary)}
-          />
+                    {isCurrent ? (
+                      <Pressable
+                        onPress={handleAdapt}
+                        disabled={phase === 'resting' || !canAdapt}
+                        className={`rounded-xl border px-3 py-2 active:opacity-80 ${
+                          canAdapt
+                            ? 'border-matte-gold/30 bg-matte-gold/10'
+                            : 'border-white/10 bg-white/5 opacity-40'
+                        }`}
+                      >
+                        <Text className="font-body text-[10px] uppercase tracking-[0.2em] text-matte-gold">
+                          Adapt
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
 
-          <ValueStepper
-            label="Load"
-            value={weight}
-            unit={isBodyweight ? 'BW' : 'kg'}
-            step={isBodyweight ? 0 : 2.5}
-            min={0}
-            max={300}
-            onChange={setWeight}
-            disabled={!canLogSet}
-          />
-
-          <ValueStepper
-            label="Reps"
-            value={reps}
-            step={1}
-            min={1}
-            max={50}
-            onChange={setReps}
-            disabled={!canLogSet}
-          />
-
-          {logs.length > 0 ? (
-            <View className="gap-2">
-              <Text className="font-body text-[10px] uppercase tracking-[0.35em] text-[#6B7568]">
-                Logged sets
-              </Text>
-              {logs.map((log) => (
-                <View
-                  key={`${log.set_index}-${log.logged_at}`}
-                  className="flex-row justify-between rounded-xl border border-white/5 bg-white/[0.03] px-4 py-3"
-                >
-                  <Text className="font-body text-sm text-[#8A9488]">Set {log.set_index}</Text>
-                  <Text className="font-body-medium text-sm text-[#E8E4DC]">
-                    {log.weight_kg > 0 ? `${log.weight_kg} kg` : 'BW'} × {log.reps}
-                  </Text>
+                  {isCurrent && canAdapt && activeLibrary ? (
+                    <Text className="mt-3 font-body text-xs text-[#6B7568]">
+                      Swap ready ·{' '}
+                      {getExerciseById(catalog, exercise.alternative_exercise_id!)?.name ??
+                        'alternative'}
+                    </Text>
+                  ) : null}
                 </View>
-              ))}
-            </View>
-          ) : null}
 
-          {canAdvanceExercise ? (
-            <Pressable
-              onPress={advanceToNextExercise}
-              className="overflow-hidden rounded-2xl border border-matte-gold/40 bg-matte-gold/10 px-8 py-4 active:opacity-80"
-            >
-              <Text className="text-center font-body-medium text-sm uppercase tracking-[0.35em] text-matte-gold">
-                Next movement →
-              </Text>
-            </Pressable>
-          ) : null}
+                {/* ExerciseCueCard rendered for every exercise in the routine */}
+                <ExerciseCueCard
+                  instructions={exItem.instructions ?? {}}
+                  progressionNote={exItem.progression_note}
+                  biomechanics={exBiomechanics}
+                />
+
+                {/* Set-logging controls are scoped to the current active exercise */}
+                {isCurrent ? (
+                  <View className="gap-4 px-5 pb-5 pt-2">
+                    <ValueStepper
+                      label="Load"
+                      value={weight}
+                      unit={isBodyweight ? 'BW' : 'kg'}
+                      step={isBodyweight ? 0 : 2.5}
+                      min={0}
+                      max={300}
+                      onChange={setWeight}
+                      disabled={!canLogSet}
+                    />
+
+                    <ValueStepper
+                      label="Reps"
+                      value={reps}
+                      step={1}
+                      min={1}
+                      max={50}
+                      onChange={setReps}
+                      disabled={!canLogSet}
+                    />
+
+                    {logs.length > 0 ? (
+                      <View className="gap-2">
+                        <Text className="font-body text-[10px] uppercase tracking-[0.35em] text-[#6B7568]">
+                          Logged sets
+                        </Text>
+                        {logs.map((log) => (
+                          <View
+                            key={`${log.set_index}-${log.logged_at}`}
+                            className="flex-row justify-between rounded-xl border border-white/5 bg-white/[0.03] px-4 py-3"
+                          >
+                            <Text className="font-body text-sm text-[#8A9488]">
+                              Set {log.set_index}
+                            </Text>
+                            <Text className="font-body-medium text-sm text-[#E8E4DC]">
+                              {log.weight_kg > 0 ? `${log.weight_kg} kg` : 'BW'} × {log.reps}
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+                    ) : null}
+                  </View>
+                ) : null}
+              </View>
+            );
+          })}
         </ScrollView>
 
         {canLogSet ? (
