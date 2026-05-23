@@ -69,7 +69,7 @@ export default function AnalyticsScreen() {
     if (!isBiologicalProfileComplete(draft)) {
       Alert.alert(
         'Incomplete passport',
-        'Date of birth, weight, height, and baseline stress (1–10) are required.',
+        'Date of birth, weight, height, baseline stress (1–10), and training frequency (1–7 days) are required.',
       );
       return;
     }
@@ -137,7 +137,8 @@ export default function AnalyticsScreen() {
         </Text>
         <Text className="mt-3 font-display-bold text-3xl text-[#E8E4DC]">Your markers</Text>
         <Text className="mt-4 font-body text-sm leading-6 text-[#8A9488]">
-          Anthropometric baseline for the Multiple Experts engine, plus your biomarker vault preview.
+          Anthropometric baseline, weekly training frequency, and per-pillar goals for the clinic
+          coaches, plus your biomarker vault preview.
         </Text>
 
         {hydrating ? (

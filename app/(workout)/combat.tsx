@@ -1,7 +1,7 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, Text, View } from 'react-native';
 import Animated, {
   Easing,
   interpolateColor,
@@ -16,7 +16,7 @@ import {
   CombatTimerPreview,
 } from '@/components/combat/CombatIntervalClock';
 import { RpeSelector } from '@/components/combat/RpeSelector';
-import { COMBAT_ARENA, COMBAT_DEFAULTS, formatTimer } from '@/constants/combat';
+import { COMBAT_ARENA, comboCalloutFull, formatTimer } from '@/constants/combat';
 import { useActiveGameplanBlock } from '@/hooks/useActiveGameplanBlock';
 import {
   comboFromLibrary,
@@ -32,6 +32,7 @@ import {
   COMBAT_TACTICAL_FOCUS_DISPLAY,
   COMBAT_TACTICAL_FOCUS_LABELS,
 } from '@/types/gameplan';
+import { ModularMovementPlayer } from '@/components/ui/ModularMovementPlayer';
 import {
   fetchLibraryCombat,
   filterCombatByMastery,
@@ -78,16 +79,14 @@ export default function CombatModeScreen() {
     if (!rounds?.length || catalog.length === 0) return undefined;
 
     const eligible = filterCombatByMastery(catalog, combatMastery);
+    const sortedRounds = [...rounds].sort((a, b) => a.round_index - b.round_index);
 
-    return rounds.flatMap((round) => {
+    return sortedRounds.flatMap((round, scheduleIndex) => {
       const focusPool = filterCombatByTacticalFocus(eligible, round.tactical_focus);
-      // Fall back to the full eligible pool when no combos match the tactical focus,
-      // then to the full catalog, so every round in the prescription gets a combo
-      // rather than being silently dropped.
-      const pool = focusPool.length > 0 ? focusPool : eligible.length > 0 ? eligible : catalog;
+      const pool = focusPool.length > 0 ? focusPool : eligible;
       const combo =
         getCombatComboById(catalog, round.combo_id) ??
-        (pool.length > 0 ? pool[round.round_index % pool.length] : null);
+        pool[scheduleIndex % Math.max(pool.length, 1)];
       if (!combo) return [];
       return [
         {
@@ -99,6 +98,9 @@ export default function CombatModeScreen() {
       ];
     });
   }, [activeBlock?.combat?.rounds, catalog, combatMastery]);
+
+  const hasPrescribedRounds = (activeBlock?.combat?.rounds?.length ?? 0) > 0;
+  const scheduleReady = !hasPrescribedRounds || (roundSchedule?.length ?? 0) > 0;
 
   const {
     phase,
@@ -115,7 +117,21 @@ export default function CombatModeScreen() {
     endSession,
     workSeconds,
     restSeconds,
+    schedule: liveSchedule,
+    reset,
   } = useCombatInterval({ rounds: roundSchedule });
+
+  const roundScheduleKey = useMemo(
+    () => roundSchedule?.map((entry) => `${entry.combo.id}:${entry.workSeconds}`).join('|') ?? '',
+    [roundSchedule],
+  );
+
+  useEffect(() => {
+    if (phase === 'idle' && roundScheduleKey) {
+      reset();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when prescribed schedule identity changes
+  }, [roundScheduleKey]);
 
   useEffect(() => {
     void prepareCombatAudio();
@@ -140,11 +156,15 @@ export default function CombatModeScreen() {
     ),
   }));
 
-  const activeTacticalFocus = useMemo(() => {
-    // round_index is 0-based in the prescription; currentRound is 1-based in the hook.
-    const round = activeBlock?.combat?.rounds?.find((r) => r.round_index === currentRound - 1);
-    return round?.tactical_focus ?? roundSchedule?.[currentRound - 1]?.tacticalFocus;
-  }, [activeBlock?.combat?.rounds, currentRound, roundSchedule]);
+  const activeTacticalFocus = useMemo(
+    () => roundSchedule?.[currentRound - 1]?.tacticalFocus,
+    [currentRound, roundSchedule],
+  );
+
+  const activeComboLibrary = useMemo(
+    () => getCombatComboById(catalog, currentCombo?.id ?? ''),
+    [catalog, currentCombo?.id],
+  );
 
   const activeCoachIntent = useMemo(() => {
     const structure = activeBlock?.combat?.rounds_structure;
@@ -157,12 +177,18 @@ export default function CombatModeScreen() {
     );
   }, [activeBlock?.combat?.rounds_structure, currentRound]);
 
-  const displayCombo =
-    phase === 'work' && comboCallout
-      ? comboCallout
-      : phase === 'rest'
-        ? 'REST'
-        : comboCallout || currentCombo.sequence.map((s) => s.toUpperCase()).join(' - ');
+  const displayCombo = useMemo(() => {
+    if (phase === 'rest') return 'REST';
+    if (phase === 'finished') return 'SESSION COMPLETE';
+    const fullSequence = comboCalloutFull(currentCombo);
+    if (phase === 'work') {
+      return fullSequence;
+    }
+    return fullSequence;
+  }, [phase, currentCombo]);
+
+  const workCalloutHint =
+    phase === 'work' && comboCallout && comboCallout !== displayCombo ? comboCallout : null;
 
   const sessionActive = phase === 'work' || phase === 'rest';
   const canSync = phase === 'finished' && roundLogs.length > 0;
@@ -235,6 +261,48 @@ export default function CombatModeScreen() {
           ) : null}
         </View>
 
+        {roundSchedule && roundSchedule.length > 0 ? (
+          <View className="mt-4">
+            <FlatList
+              horizontal
+              data={liveSchedule.length ? liveSchedule : roundSchedule}
+              keyExtractor={(item, index) => `${item.combo.id}-round-${index}`}
+              showsHorizontalScrollIndicator={false}
+              contentContainerClassName="gap-2 px-1"
+              renderItem={({ item, index }) => {
+                const roundNumber = index + 1;
+                const isCurrent =
+                  (phase === 'work' || phase === 'rest') && roundNumber === currentRound;
+                const isDone = phase === 'finished' || roundNumber < currentRound;
+                return (
+                  <View
+                    className={`min-w-[132px] rounded-xl border px-3 py-2.5 ${
+                      isCurrent
+                        ? 'border-matte-gold/45 bg-matte-gold/10'
+                        : isDone
+                          ? 'border-white/5 bg-white/[0.02] opacity-50'
+                          : 'border-white/10 bg-white/[0.03]'
+                    }`}
+                  >
+                    <Text className="font-body text-[9px] uppercase tracking-[0.25em] text-[#6B7568]">
+                      Round {roundNumber}
+                    </Text>
+                    <Text
+                      className="mt-1 font-body-medium text-xs text-[#E8E4DC]"
+                      numberOfLines={2}
+                    >
+                      {item.combo.name}
+                    </Text>
+                    <Text className="mt-1 font-body text-[9px] leading-4 text-[#8A9488]" numberOfLines={2}>
+                      {comboCalloutFull(item.combo)}
+                    </Text>
+                  </View>
+                );
+              }}
+            />
+          </View>
+        ) : null}
+
         <View className="flex-1 justify-between pt-6">
           <View className="items-center">
             {phase === 'idle' ? (
@@ -267,6 +335,24 @@ export default function CombatModeScreen() {
                 {COMBAT_TACTICAL_FOCUS_DISPLAY[activeTacticalFocus]}
               </Text>
             ) : null}
+
+            {phase !== 'rest' && phase !== 'finished' ? (
+              <View className="mb-6 w-full gap-4">
+                <ModularMovementPlayer
+                  url={activeComboLibrary?.visual_asset_url}
+                  type={activeComboLibrary?.visual_asset_type}
+                  movementName={activeComboLibrary?.combo_name ?? currentCombo?.name}
+                  subtitle={
+                    activeTacticalFocus
+                      ? COMBAT_TACTICAL_FOCUS_LABELS[activeTacticalFocus]
+                      : undefined
+                  }
+                  accent="gold"
+                  height={176}
+                />
+              </View>
+            ) : null}
+
             <Text
               className="text-center font-body-medium uppercase leading-[1.12] text-[#E8E4DC]"
               style={{
@@ -279,6 +365,16 @@ export default function CombatModeScreen() {
             >
               {displayCombo}
             </Text>
+            {workCalloutHint ? (
+              <Text className="mt-3 text-center font-body text-sm uppercase tracking-[0.2em] text-matte-gold/70">
+                {workCalloutHint}
+              </Text>
+            ) : null}
+            {sessionActive && phase === 'work' ? (
+              <Text className="mt-2 text-center font-body text-[10px] uppercase tracking-[0.3em] text-[#6B7568]">
+                {currentCombo.name}
+              </Text>
+            ) : null}
             {activeCoachIntent && sessionActive ? (
               <Text className="mt-4 px-4 text-center font-body text-sm leading-5 text-[#8A9488]">
                 {activeCoachIntent}
@@ -314,7 +410,7 @@ export default function CombatModeScreen() {
             {phase === 'idle' ? (
               <Pressable
                 onPress={start}
-                disabled={catalogLoading}
+                disabled={catalogLoading || !scheduleReady}
                 className="rounded-2xl border border-matte-gold/35 bg-matte-gold/10 px-6 py-5 active:opacity-80"
               >
                 <Text className="text-center font-body-medium text-sm uppercase tracking-[0.35em] text-matte-gold">

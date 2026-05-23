@@ -103,7 +103,7 @@ export function ExerciseCueCard({
   if (entries.length === 0 && !progressionNote && !hasBiomechanics) return null;
 
   return (
-    <View className="rounded-2xl border border-white/8 bg-white/[0.03]">
+    <View className="gap-5 rounded-2xl border border-white/8 bg-white/[0.03]">
       <Pressable
         onPress={() => setExpanded((value) => !value)}
         accessibilityRole="button"

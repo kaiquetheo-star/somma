@@ -1,12 +1,13 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FlowGestureZones } from '@/components/spirit/FlowGestureZones';
 import { SanctuaryBreathOrb } from '@/components/spirit/SanctuaryBreathOrb';
+import { ModularMovementPlayer } from '@/components/ui/ModularMovementPlayer';
 import {
   FLOW_BREATH_DYNAMIC,
   FLOW_BREATH_STATIC,
@@ -19,6 +20,11 @@ import { useFlowAsanaSession } from '@/hooks/useFlowAsanaSession';
 import { useSpiritBreathCatalog } from '@/hooks/useSpiritBreathCatalog';
 import { useWorkoutNavigation } from '@/hooks/useWorkoutNavigation';
 import { cyclesForDuration } from '@/lib/breathwork/tempoMap';
+import { resolveSpiritSequence } from '@/lib/gameplan/spiritSequence';
+import {
+  fetchLibraryFlowSpirit,
+  type LibraryFlowSpiritSession,
+} from '@/lib/catalog/library';
 import { useSommaStore } from '@/store/useSommaStore';
 import type { FlowAsanaPrescription } from '@/types/gameplan';
 
@@ -53,17 +59,33 @@ export default function SpiritModeScreen() {
   const resolvedBlockId = blockId ?? 'block-morning-flow';
   const ascendedRef = useRef(false);
 
-  const isFlowMode =
-    activeBlock?.spirit?.mode === 'flow' &&
-    (activeBlock.spirit.asanas?.length ?? 0) > 0;
+  const spiritSequence = useMemo(
+    () => resolveSpiritSequence(activeBlock?.spirit),
+    [activeBlock?.spirit],
+  );
 
   const flowAsanas = useMemo(
-    () =>
-      isFlowMode && activeBlock?.spirit?.asanas?.length
-        ? activeBlock.spirit.asanas
-        : DEFAULT_FLOW_ASANAS,
-    [activeBlock?.spirit?.asanas, isFlowMode],
+    () => (spiritSequence.length > 0 ? spiritSequence : DEFAULT_FLOW_ASANAS),
+    [spiritSequence],
   );
+
+  const isFlowMode = useMemo(() => {
+    if (activeBlock?.spirit?.mode === 'breathwork') return false;
+    if (activeBlock?.spirit?.mode === 'flow') return true;
+    return spiritSequence.length > 0;
+  }, [activeBlock?.spirit?.mode, spiritSequence.length]);
+
+  const [flowSpiritCatalog, setFlowSpiritCatalog] = useState<LibraryFlowSpiritSession[]>([]);
+
+  useEffect(() => {
+    let mounted = true;
+    void fetchLibraryFlowSpirit().then((rows) => {
+      if (mounted) setFlowSpiritCatalog(rows);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const { tempos: breathCatalog, resolve: resolveBreath } = useSpiritBreathCatalog();
   const { tempo: prescribedTempo, session: spiritSession } = useMemo(
@@ -166,6 +188,44 @@ export default function SpiritModeScreen() {
   const showBreathActive =
     !isFlowMode && (breathEngine.status === 'running' || breathEngine.status === 'paused');
 
+  const activeMovementLibrary = useMemo((): LibraryFlowSpiritSession | null => {
+    if (isFlowMode) {
+      const asana = flowSession.currentAsana ?? flowSession.sortedAsanas[0];
+      if (!asana) return null;
+      return (
+        flowSpiritCatalog.find(
+          (row) => row.slug === asana.slug || row.id === asana.asana_id,
+        ) ?? null
+      );
+    }
+    return spiritSession;
+  }, [
+    flowSession.currentAsana,
+    flowSession.sortedAsanas,
+    flowSpiritCatalog,
+    isFlowMode,
+    spiritSession,
+  ]);
+
+  const activeMovementName = useMemo(() => {
+    if (isFlowMode) {
+      return (
+        flowSession.currentAsana?.name ??
+        flowSession.sortedAsanas[0]?.name ??
+        activeBlock?.title ??
+        'Flow Recovery'
+      );
+    }
+    return spiritSession?.session_name ?? prescribedTempo.name;
+  }, [
+    activeBlock?.title,
+    flowSession.currentAsana?.name,
+    flowSession.sortedAsanas,
+    isFlowMode,
+    prescribedTempo.name,
+    spiritSession?.session_name,
+  ]);
+
   return (
     <GestureHandlerRootView style={styles.root}>
       <StatusBar style="light" />
@@ -202,6 +262,53 @@ export default function SpiritModeScreen() {
             </View>
           </FlowGestureZones>
 
+          {isFlowMode && (showFlowIdle || showFlowActive) ? (
+            <View style={styles.sequenceRail}>
+              <FlatList
+                horizontal
+                data={spiritSequence.length > 0 ? spiritSequence : flowSession.sortedAsanas}
+                keyExtractor={(item) => item.asana_id}
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.sequenceContent}
+                renderItem={({ item, index }) => {
+                  const isCurrent = showFlowActive && index === flowSession.currentIndex;
+                  return (
+                    <View
+                      style={[styles.sequenceChip, isCurrent ? styles.sequenceChipActive : null]}
+                    >
+                      <Text
+                        style={[styles.sequenceChipName, isCurrent ? styles.sequenceChipNameActive : null]}
+                        numberOfLines={2}
+                      >
+                        {item.name}
+                      </Text>
+                      <Text style={styles.sequenceChipMeta}>
+                        {index + 1}/{flowSession.totalPoses} · {item.hold_seconds}s
+                      </Text>
+                    </View>
+                  );
+                }}
+              />
+            </View>
+          ) : null}
+
+          {showFlowIdle || showBreathActive || showFlowActive ? (
+            <View style={styles.movementVisualStage} pointerEvents="none">
+              <ModularMovementPlayer
+                url={activeMovementLibrary?.visual_asset_url}
+                type={activeMovementLibrary?.visual_asset_type}
+                movementName={activeMovementName}
+                subtitle={
+                  isFlowMode && flowSession.currentAsana
+                    ? `${flowSession.currentAsana.hold_seconds}s hold`
+                    : undefined
+                }
+                accent={isFlowMode ? 'silver' : 'gold'}
+                height={168}
+              />
+            </View>
+          ) : null}
+
           {showFlowIdle ? (
             <Pressable onPress={flowSession.start} style={styles.enterSanctuary}>
               <Text style={styles.enterLabel}>Enter Sanctuary</Text>
@@ -209,42 +316,15 @@ export default function SpiritModeScreen() {
                 <Text style={styles.enterHint}>{activeBlock.spirit.prescribed_reason}</Text>
               ) : null}
               <Text style={styles.poseMeta}>
-                {flowAsanas.length} poses · ~
+                {flowSession.sortedAsanas.length} poses · ~
                 {activeBlock?.spirit?.duration_minutes ?? 15} min
               </Text>
             </Pressable>
           ) : null}
 
-          {/*
-            Idle state: map over the full asanas sequence so the user can preview
-            every pose before entering the sanctuary. A horizontal scroll strip
-            shows name and hold duration for each step in the routine.
-          */}
-          {showFlowIdle ? (
-            <View style={styles.idleSequence}>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.idleSequenceContent}
-              >
-                {flowAsanas.map((pose, idx) => (
-                  <View key={pose.asana_id} style={styles.posePill}>
-                    <Text style={styles.posePillNum}>{idx + 1}</Text>
-                    <Text style={styles.posePillName} numberOfLines={2}>
-                      {pose.name}
-                    </Text>
-                    <Text style={styles.posePillHold}>{pose.hold_seconds}s</Text>
-                  </View>
-                ))}
-              </ScrollView>
-            </View>
-          ) : null}
-
           {!isFlowMode && breathEngine.status === 'idle' ? (
             <Pressable onPress={breathEngine.start} style={styles.enterSanctuary}>
-              <Text style={styles.enterLabel}>
-                {spiritSession?.session_name ?? prescribedTempo.name}
-              </Text>
+              <Text style={styles.enterLabel}>{activeMovementName}</Text>
               <Text style={styles.poseMeta}>
                 {prescribedTempo.inhale}·{prescribedTempo.hold}·{prescribedTempo.exhale}
                 {prescribedTempo.holdEmpty > 0 ? `·${prescribedTempo.holdEmpty}` : ''} · ~
@@ -265,7 +345,6 @@ export default function SpiritModeScreen() {
             <View style={styles.footer} pointerEvents="none">
               {isFlowMode && flowSession.currentAsana ? (
                 <>
-                  <Text style={styles.asanaName}>{flowSession.currentAsana.name}</Text>
                   <Text style={styles.holdTimer}>
                     {formatSpiritTimer(flowSession.secondsLeft)}
                   </Text>
@@ -273,21 +352,6 @@ export default function SpiritModeScreen() {
                     {flowSession.currentIndex + 1} / {flowSession.totalPoses}
                     {flowSession.isLastPose ? ' · final pose' : ''}
                   </Text>
-                  {/*
-                    Progress dots — one pip per pose in the sequence so the user
-                    can see exactly where they are in the full routine at a glance.
-                  */}
-                  <View style={styles.progressDots}>
-                    {flowSession.sortedAsanas.map((_, dotIdx) => (
-                      <View
-                        key={dotIdx}
-                        style={[
-                          styles.progressDot,
-                          dotIdx === flowSession.currentIndex && styles.progressDotActive,
-                        ]}
-                      />
-                    ))}
-                  </View>
                   <Text style={styles.gestureHint}>Tap left · previous · right · next</Text>
                 </>
               ) : (
@@ -333,6 +397,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  movementVisualStage: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: '18%',
+    alignItems: 'center',
+    gap: 16,
+    zIndex: 20,
+  },
+  movementBlueprintName: {
+    marginTop: 4,
+    paddingHorizontal: 28,
+    textAlign: 'center',
+    fontFamily: 'PlayfairDisplay_600SemiBold',
+    fontSize: 20,
+    lineHeight: 28,
+    color: '#E8E4DC',
+  },
   enterSanctuary: {
     position: 'absolute',
     left: 32,
@@ -365,49 +447,46 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     color: SPIRIT_SANCTUARY.textMuted,
   },
-  // Idle-state horizontal strip mapping the full asana sequence
-  idleSequence: {
+  sequenceRail: {
     position: 'absolute',
-    bottom: 0,
     left: 0,
     right: 0,
-    paddingBottom: 20,
+    top: 56,
     zIndex: 20,
   },
-  idleSequenceContent: {
+  sequenceContent: {
     paddingHorizontal: 20,
+    gap: 10,
   },
-  posePill: {
-    alignItems: 'center',
-    paddingHorizontal: 14,
+  sequenceChip: {
+    width: 148,
+    paddingHorizontal: 12,
     paddingVertical: 10,
-    borderRadius: 12,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     backgroundColor: 'rgba(255, 255, 255, 0.03)',
-    marginRight: 10,
-    maxWidth: 110,
   },
-  posePillNum: {
+  sequenceChipActive: {
+    borderColor: 'rgba(191, 160, 106, 0.45)',
+    backgroundColor: 'rgba(191, 160, 106, 0.08)',
+  },
+  sequenceChipName: {
     fontFamily: 'Inter_400Regular',
-    fontSize: 8,
-    letterSpacing: 2,
-    textTransform: 'uppercase',
+    fontSize: 12,
+    lineHeight: 16,
     color: SPIRIT_SANCTUARY.textMuted,
   },
-  posePillName: {
-    fontFamily: 'Inter_400Regular',
-    fontSize: 11,
-    textAlign: 'center',
+  sequenceChipNameActive: {
     color: SPIRIT_SANCTUARY.textPrimary,
-    marginTop: 4,
   },
-  posePillHold: {
+  sequenceChipMeta: {
+    marginTop: 6,
     fontFamily: 'Inter_400Regular',
     fontSize: 9,
     letterSpacing: 1.5,
-    color: SPIRIT_SANCTUARY.textMuted,
-    marginTop: 3,
+    textTransform: 'uppercase',
+    color: 'rgba(107, 117, 104, 0.75)',
   },
   footer: {
     paddingHorizontal: 28,
@@ -435,26 +514,6 @@ const styles = StyleSheet.create({
     letterSpacing: 3,
     textTransform: 'uppercase',
     color: SPIRIT_SANCTUARY.textMuted,
-  },
-  // Sequence progress dots — one per pose, active pip elongated in gold
-  progressDots: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 10,
-  },
-  progressDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: 'rgba(107, 117, 104, 0.35)',
-    marginHorizontal: 3,
-  },
-  progressDotActive: {
-    width: 10,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: 'rgba(191, 160, 106, 0.75)',
   },
   gestureHint: {
     marginTop: 14,

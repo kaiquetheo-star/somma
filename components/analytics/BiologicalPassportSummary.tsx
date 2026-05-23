@@ -2,6 +2,7 @@ import { Text, View } from 'react-native';
 
 import {
   ageFromDateOfBirth,
+  formatTrainingDaysPerWeek,
   type BiologicalProfile,
   isBiologicalProfileComplete,
 } from '@/types/biological';
@@ -69,6 +70,10 @@ export function BiologicalPassportSummary({ profile }: BiologicalPassportSummary
             : '—'
         }
       />
+      <SummaryRow
+        label="Training frequency"
+        value={formatTrainingDaysPerWeek(profile.training_days_per_week)}
+      />
       <View className="border-t border-white/5 py-3">
         <Text className="font-body text-[10px] uppercase tracking-[0.3em] text-[#6B7568]">
           Injuries & limits
@@ -76,6 +81,16 @@ export function BiologicalPassportSummary({ profile }: BiologicalPassportSummary
         <Text className="mt-2 font-body text-sm leading-6 text-[#A8B0A6]">
           {profile.current_injuries?.trim() || 'None reported'}
         </Text>
+      </View>
+
+      <View className="border-t border-white/5 py-3">
+        <Text className="font-body text-[10px] uppercase tracking-[0.3em] text-[#6B7568]">
+          Pillar goals
+        </Text>
+        <SummaryRow label="Iron" value={profile.goal_iron?.trim() || '—'} />
+        <SummaryRow label="Combat" value={profile.goal_combat?.trim() || '—'} />
+        <SummaryRow label="Flow" value={profile.goal_flow?.trim() || '—'} />
+        <SummaryRow label="Spirit" value={profile.goal_spirit?.trim() || '—'} />
       </View>
     </View>
   );

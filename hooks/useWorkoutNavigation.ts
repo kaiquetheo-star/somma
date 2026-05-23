@@ -2,7 +2,10 @@ import { useRouter, type Href } from 'expo-router';
 
 import { WORKOUT_ROUTES } from '@/constants/workout';
 import type { GameplanBlock } from '@/types/gameplan';
-import { useSommaStore } from '@/store/useSommaStore';
+import {
+  isSelectedDayProtocolComplete,
+  useSommaStore,
+} from '@/store/useSommaStore';
 import type { WorkoutCompletionInput, WorkoutPillarLog } from '@/types/performance';
 
 export interface FinishBlockMeta {
@@ -13,6 +16,22 @@ export interface FinishBlockMeta {
   weight_used?: number | null;
   reps_completed?: number | null;
   actual_rest_seconds?: number | null;
+}
+
+function buildAscensionParams(blockId: string, meta: FinishBlockMeta): Record<string, string> {
+  const params: Record<string, string> = {
+    blockId,
+    pillar: meta.pillar,
+  };
+
+  if (meta.rpe_score != null) params.rpe = String(meta.rpe_score);
+  if (meta.volume != null) params.volume = String(meta.volume);
+  if (meta.exercise_id) params.exerciseId = meta.exercise_id;
+  if (meta.weight_used != null) params.weightUsed = String(meta.weight_used);
+  if (meta.reps_completed != null) params.repsCompleted = String(meta.reps_completed);
+  if (meta.actual_rest_seconds != null) params.restSeconds = String(meta.actual_rest_seconds);
+
+  return params;
 }
 
 export function useWorkoutNavigation() {
@@ -37,17 +56,17 @@ export function useWorkoutNavigation() {
   const finishBlock = (blockId: string, meta: FinishBlockMeta) => {
     completeBlock(blockId);
 
-    const params: Record<string, string> = {
-      blockId,
-      pillar: meta.pillar,
-    };
+    const params = buildAscensionParams(blockId, meta);
+    const state = useSommaStore.getState();
+    const dayProtocolComplete = isSelectedDayProtocolComplete(state);
 
-    if (meta.rpe_score != null) params.rpe = String(meta.rpe_score);
-    if (meta.volume != null) params.volume = String(meta.volume);
-    if (meta.exercise_id) params.exerciseId = meta.exercise_id;
-    if (meta.weight_used != null) params.weightUsed = String(meta.weight_used);
-    if (meta.reps_completed != null) params.repsCompleted = String(meta.reps_completed);
-    if (meta.actual_rest_seconds != null) params.restSeconds = String(meta.actual_rest_seconds);
+    if (dayProtocolComplete) {
+      router.push({
+        pathname: '/(workout)/summary',
+        params,
+      } as unknown as Href);
+      return;
+    }
 
     router.push({
       pathname: '/(workout)/ascension',
@@ -58,7 +77,7 @@ export function useWorkoutNavigation() {
   return { openBlock, finishBlock };
 }
 
-/** Build completion payload for Ascension from route params */
+/** Build completion payload for Ascension / Summary from route params */
 export function completionFromParams(params: {
   blockId?: string;
   pillar?: string;

@@ -4,15 +4,24 @@ import { isSupabaseConfigured } from '@/lib/config';
 import { getSupabase } from '@/lib/supabase/client';
 import { findSpiritSessionByTempoId } from '@/lib/breathwork/fromCatalog';
 import { COMBAT_TACTICAL_FOCUS_LABELS, type GameplanBlock } from '@/types/gameplan';
-import type { LibraryExercise } from '@/types/catalog';
+import {
+  parseLibraryVisualAsset,
+  type LibraryCombatCombo,
+  type LibraryExercise,
+  type LibraryFlowSpiritSession,
+} from '@/types/catalog';
 
 export type {
   IronExerciseBiomechanics,
   JointStressProfile,
+  LibraryCombatCombo,
   LibraryExercise,
+  LibraryFlowSpiritSession,
+  LibraryVisualAsset,
   MovementPattern,
+  VisualAssetType,
 } from '@/types/catalog';
-export { formatCnsFatigueCost, formatJointStress } from '@/types/catalog';
+export { formatCnsFatigueCost, formatJointStress, parseLibraryVisualAsset } from '@/types/catalog';
 
 const CACHE_KEYS = {
   exercises: 'somma-cache-library-exercises-v2',
@@ -23,30 +32,6 @@ const CACHE_KEYS = {
 const CACHE_TTL_MS = 1000 * 60 * 60 * 12;
 
 import type { CombatTacticalFocus } from '@/types/gameplan';
-
-export interface LibraryCombatCombo {
-  id: string;
-  slug: string;
-  combo_name: string;
-  sequence: string[];
-  complexity_level: number;
-  tactical_focus: CombatTacticalFocus;
-}
-
-export interface LibraryFlowSpiritSession {
-  id: string;
-  slug: string;
-  pillar: 'flow' | 'spirit';
-  session_name: string;
-  description: string | null;
-  duration_minutes: number;
-  tempo_profile: Record<string, unknown>;
-  complexity_level: number;
-  target_recovery_zones: string[];
-  complexity_tier: number;
-  is_dynamic_flow: boolean;
-  default_hold_seconds: number;
-}
 
 interface CacheEnvelope<T> {
   fetched_at: string;
@@ -102,6 +87,7 @@ function mapExerciseRow(row: Record<string, unknown>): LibraryExercise {
         : null;
 
   return {
+    ...parseLibraryVisualAsset(row),
     id: String(row.id),
     slug: String(row.slug),
     name: String(row.name),
@@ -144,6 +130,7 @@ function mapCombatRow(row: Record<string, unknown>): LibraryCombatCombo {
       : 'footwork_range';
 
   return {
+    ...parseLibraryVisualAsset(row),
     id: String(row.id),
     slug: String(row.slug),
     combo_name: String(row.combo_name),
@@ -162,6 +149,7 @@ function mapFlowSpiritRow(row: Record<string, unknown>): LibraryFlowSpiritSessio
       : 2;
 
   return {
+    ...parseLibraryVisualAsset(row),
     id: String(row.id),
     slug: String(row.slug),
     pillar: row.pillar === 'flow' ? 'flow' : 'spirit',

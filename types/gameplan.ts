@@ -116,6 +116,8 @@ export interface SpiritBlockPrescription {
   recovery_focus_zones?: RecoveryZone[];
   /** Ordered asana sequence when mode is flow */
   asanas?: FlowAsanaPrescription[];
+  /** AI alias for `asanas` — same ordered flow sequence */
+  sequence?: FlowAsanaPrescription[];
 }
 
 export interface GameplanBlock {
@@ -131,9 +133,27 @@ export interface GameplanBlock {
   spirit?: SpiritBlockPrescription;
 }
 
+/** One day in the 7-day Head Coach microcycle (day_index 1 = Monday … 7 = Sunday) */
+export interface MicrocycleDay {
+  day_index: number;
+  is_rest_day: boolean;
+  focus_label: string;
+  /** All training blocks completed for this calendar day */
+  is_completed?: boolean;
+  /** Calendar date (YYYY-MM-DD) when week_start_date is known */
+  date?: string;
+  blocks: GameplanBlock[];
+}
+
 export interface DailyGameplan {
-  /** ISO date key (YYYY-MM-DD) */
+  /** ISO date key (YYYY-MM-DD) — "today" for the command surface */
   date: string;
+  /** Monday anchoring the microcycle week */
+  week_start_date?: string;
+  training_days_per_week?: number;
+  /** Full 7-day plan from the AI clinic */
+  microcycle: MicrocycleDay[];
+  /** Today's ritual blocks (derived from microcycle or legacy single-day payload) */
   blocks: GameplanBlock[];
   generated_at: string;
 }

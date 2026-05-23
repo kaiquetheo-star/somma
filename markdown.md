@@ -3,7 +3,7 @@
 **Project:** SOMMA (The Longevity OS)  
 **Format:** Markdown (`.md`) — single source of truth for product, architecture, and implementation  
 **Stack:** Expo SDK 54 · TypeScript · Expo Router · NativeWind v4 · Zustand · Supabase · OpenRouter  
-**Checkpoint reference:** `CONTEXT_ANCHOR_V2.md` (implementation status)
+**Checkpoint reference:** `CONTEXT_ANCHOR_V5.md` (implementation status)
 
 *Markdown is the canonical spec format: headers and lists parse reliably for humans and AI assistants.*
 
@@ -640,6 +640,6 @@ Persist key: `somma-offline-store`.
 | 1.0 | Initial | Monolithic AI, mobile-only assumptions |
 | 2.0 | May 2026 | Cross-platform mandate, Multiple Experts, Biological Passport, Quiet Luxury enforcement, Ascension graceful exit |
 
-**Implementation status:** See `CONTEXT_ANCHOR_V2.md`.  
+**Implementation status:** See `CONTEXT_ANCHOR_V5.md`.  
 **SQL apply order:** `001` → `006`, then `seed.sql`.  
 **Deploy:** `supabase functions deploy generate_daily_protocol`.

@@ -1,10 +1,12 @@
 import { useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Pressable, Text, View } from 'react-native';
 
 import { ExerciseCueCard } from '@/components/iron/ExerciseCueCard';
+import { TargetLoadBanner } from '@/components/iron/TargetLoadBanner';
 import { RestTimerOverlay } from '@/components/iron/RestTimerOverlay';
 import { ValueStepper } from '@/components/iron/ValueStepper';
+import { ModularMovementPlayer } from '@/components/ui/ModularMovementPlayer';
 import { WorkoutShell } from '@/components/workout/WorkoutShell';
 import {
   resolveIronExercise,
@@ -20,9 +22,11 @@ import {
 } from '@/lib/catalog/library';
 import { resolveIronExerciseView } from '@/lib/iron/resolveExercise';
 import { hapticSetLogged } from '@/lib/haptics';
+import { getTargetWeight } from '@/lib/physics/rmCalculator';
 import type { IronExerciseBiomechanics } from '@/types/catalog';
 import type { IronExercisePrescription } from '@/types/gameplan';
 import type { IronSetLog } from '@/types/performance';
+import { useAuth } from '@/providers/AuthProvider';
 import { useSommaStore } from '@/store/useSommaStore';
 
 type IronPhase = 'lifting' | 'resting' | 'done';
@@ -54,11 +58,14 @@ function stubPrescriptionFromTemplate(template: IronExerciseTemplate): IronExerc
 }
 
 export default function IronModeScreen() {
+  const { user } = useAuth();
   const { blockId, title } = useLocalSearchParams<{ blockId?: string; title?: string }>();
   const activeBlock = useActiveGameplanBlock(blockId);
   const { finishBlock } = useWorkoutNavigation();
   const equipment = useSommaStore((state) => state.user_environment.available_equipment);
+  const goalIron = useSommaStore((state) => state.user_biological.goal_iron);
   const appendIronSession = useSommaStore((state) => state.appendIronSession);
+  const logIronSet = useSommaStore((state) => state.logIronSet);
 
   const localFallback = useMemo(() => resolveIronExercise(equipment), [equipment]);
 
@@ -77,6 +84,7 @@ export default function IronModeScreen() {
   const [allExerciseLogs, setAllExerciseLogs] = useState<
     { exercise_id: string; exercise_name: string; sets: IronSetLog[] }[]
   >([]);
+  const [e1rmTargetWeight, setE1rmTargetWeight] = useState<number | null>(null);
 
   const resolvedBlockId = blockId ?? 'block-main-iron';
   const prescriptions = activeBlock?.iron?.exercises;
@@ -125,9 +133,69 @@ export default function IronModeScreen() {
   );
   const totalSets = exercise?.target_sets ?? 4;
   const isBodyweight = (exercise?.target_weight_kg ?? weight) <= 0;
-  const canAdapt =
-    Boolean(exercise?.alternative_exercise_id) &&
-    exercise.alternative_exercise_id !== exercise.exercise_id;
+
+  const prescribedTargetKg = useMemo(() => {
+    const raw = prescriptions?.[exerciseIndex]?.target_weight_kg ?? exercise?.target_weight_kg;
+    return raw != null && raw > 0 ? raw : null;
+  }, [prescriptions, exerciseIndex, exercise?.target_weight_kg]);
+
+  const targetLoadKg = prescribedTargetKg ?? e1rmTargetWeight;
+  const targetLoadSource: 'prescription' | 'e1rm' | undefined = prescribedTargetKg
+    ? 'prescription'
+    : e1rmTargetWeight
+      ? 'e1rm'
+      : undefined;
+
+  useEffect(() => {
+    if (!user?.id || !exercise?.exercise_id) {
+      setE1rmTargetWeight(null);
+      return;
+    }
+
+    if (prescribedTargetKg != null) {
+      setE1rmTargetWeight(null);
+      return;
+    }
+
+    let cancelled = false;
+    void getTargetWeight(
+      user.id,
+      exercise.exercise_id,
+      exercise.target_reps,
+      exercise.target_rir,
+      goalIron,
+    ).then((resolved) => {
+      if (!cancelled) setE1rmTargetWeight(resolved);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    user?.id,
+    exercise?.exercise_id,
+    exercise?.target_reps,
+    exercise?.target_rir,
+    goalIron,
+    prescribedTargetKg,
+  ]);
+
+  useEffect(() => {
+    if (!exercise) return;
+    setWeight(prescribedTargetKg ?? exercise.target_weight_kg);
+    setReps(exercise.target_reps);
+    setCurrentSet(1);
+    setLogs([]);
+    setPhase('lifting');
+    setRestBeforeSet(0);
+  }, [exercise?.exercise_id, exerciseIndex, prescribedTargetKg]);
+
+  useEffect(() => {
+    if (targetLoadKg == null || targetLoadKg <= 0 || logs.length > 0 || phase !== 'lifting') {
+      return;
+    }
+    setWeight(targetLoadKg);
+  }, [targetLoadKg, logs.length, phase]);
 
   useEffect(() => {
     let mounted = true;
@@ -142,16 +210,6 @@ export default function IronModeScreen() {
       mounted = false;
     };
   }, []);
-
-  useEffect(() => {
-    if (!exercise) return;
-    setWeight(exercise.target_weight_kg);
-    setReps(exercise.target_reps);
-    setCurrentSet(1);
-    setLogs([]);
-    setPhase('lifting');
-    setRestBeforeSet(0);
-  }, [exercise?.exercise_id, exerciseIndex]);
 
   const onRestComplete = useCallback(() => {
     if (!exercise) return;
@@ -171,7 +229,7 @@ export default function IronModeScreen() {
     if (!altId || altId === exercise.exercise_id) {
       Alert.alert(
         'No alternative',
-        'This movement has no pre-mapped swap in today's protocol. Recalibrate to refresh options.',
+        'This movement has no pre-mapped swap in today’s protocol. Recalibrate to refresh options.',
       );
       return;
     }
@@ -208,12 +266,20 @@ export default function IronModeScreen() {
       weight_kg: weight,
       reps,
       target_reps: exercise.target_reps,
+      rir: exercise.target_rir,
       rest_seconds_used: restBeforeSet,
       logged_at: new Date().toISOString(),
     };
     setRestBeforeSet(0);
 
     setLogs((prev) => [...prev, entry]);
+    logIronSet({
+      block_id: resolvedBlockId,
+      exercise_id: exercise.exercise_id,
+      exercise_name: exercise.name,
+      set: entry,
+      target_rir: exercise.target_rir,
+    });
     await hapticSetLogged();
 
     if (currentSet >= totalSets) {
@@ -297,19 +363,13 @@ export default function IronModeScreen() {
       eyebrow="Iron · Strength"
       title={title ?? 'Iron Mode'}
       accent="obsidian"
-      onComplete={
-        canCompleteRitual
-          ? () => handleCompleteRitual()
-          : canAdvanceExercise
-            ? advanceToNextExercise
-            : undefined
-      }
-      completeDisabled={!canCompleteRitual && !canAdvanceExercise}
+      onComplete={canCompleteRitual ? () => handleCompleteRitual() : undefined}
+      completeDisabled={!canCompleteRitual}
       completeLabel={
         canCompleteRitual
           ? 'Complete Ritual'
           : canAdvanceExercise
-            ? `Next movement · ${exerciseIndex + 2} of ${exerciseQueue.length}`
+            ? 'Next movement'
             : `Log ${totalSets} sets to finish`
       }
     >
@@ -322,104 +382,110 @@ export default function IronModeScreen() {
           />
         ) : null}
 
-        {/*
-          Iterate over the ENTIRE exerciseQueue so the user can scroll through the
-          full routine. Each exercise gets its own ExerciseCueCard. The current
-          exercise also exposes the set-logging controls.
-        */}
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerClassName={`gap-6 ${canLogSet ? 'pb-24' : 'pb-4'}`}
-        >
-          {exerciseQueue.map((exItem, idx) => {
-            const isCurrent = idx === exerciseIndex;
-            const isPast = idx < exerciseIndex;
-            const exLib = getExerciseById(catalog, exItem.exercise_id);
-            const exBiomechanics = biomechanicsFromLibrary(exLib);
-            const exCanAdapt =
-              isCurrent &&
-              Boolean(exItem.alternative_exercise_id) &&
-              exItem.alternative_exercise_id !== exItem.exercise_id;
+        <FlatList
+          data={exerciseQueue}
+          keyExtractor={(item, index) => `${item.exercise_id}-${index}`}
+          showsVerticalScrollIndicator
+          contentContainerClassName={`gap-5 ${canLogSet ? 'pb-24' : 'pb-4'}`}
+          ListHeaderComponent={
+            <Text className="font-body text-[10px] uppercase tracking-[0.35em] text-[#6B7568]">
+              {exerciseQueue.length > 1
+                ? `Full protocol · ${exerciseQueue.length} movements — scroll & tap to switch`
+                : 'Prescribed movement'}
+            </Text>
+          }
+          renderItem={({ item: queuedExercise, index }) => {
+            const isActive = index === exerciseIndex;
+            const queuedLibrary = getExerciseById(catalog, queuedExercise.exercise_id);
+            const itemCanAdapt =
+              Boolean(queuedExercise.alternative_exercise_id) &&
+              queuedExercise.alternative_exercise_id !== queuedExercise.exercise_id;
 
             return (
-              <View
-                key={`${exItem.exercise_id}-${idx}`}
-                className={`overflow-hidden rounded-2xl border ${
-                  isCurrent
-                    ? 'border-matte-gold/20 bg-white/[0.05]'
-                    : isPast
-                      ? 'border-white/[0.05] bg-white/[0.02] opacity-50'
-                      : 'border-white/[0.07] bg-white/[0.02]'
+              <Pressable
+                onPress={() => {
+                  if (index !== exerciseIndex && phase !== 'resting') {
+                    setExerciseIndex(index);
+                  }
+                }}
+                className={`gap-3 rounded-2xl border px-4 py-4 ${
+                  isActive
+                    ? 'border-matte-gold/35 bg-matte-gold/[0.06]'
+                    : 'border-white/8 bg-white/[0.02] opacity-80'
                 }`}
               >
-                {/* Exercise header */}
-                <View className="px-5 py-4">
-                  <View className="flex-row items-start justify-between">
-                    <View className="flex-1 pr-3">
-                      <Text className="font-body text-[10px] uppercase tracking-[0.35em] text-[#6B7568]">
-                        {exerciseQueue.length > 1
-                          ? `Movement ${idx + 1} of ${exerciseQueue.length}`
-                          : 'Prescribed movement'}
-                        {isPast ? ' · Done' : ''}
-                      </Text>
-                      <Text
-                        className={`font-display text-xl ${
-                          isCurrent ? 'text-[#E8E4DC]' : 'text-[#6B7568]'
-                        }`}
-                      >
-                        {exItem.name}
-                      </Text>
-                      <Text className="mt-2 font-body text-sm text-[#8A9488]">
-                        {exItem.target_rep_range}
-                      </Text>
-                      {isCurrent ? (
-                        <Text className="mt-1 font-body text-[10px] uppercase tracking-[0.25em] text-[#6B7568]">
-                          Set {Math.min(currentSet, totalSets)} of {totalSets}
-                          {exItem.execution_technique
-                            ? ` · ${exItem.execution_technique}`
-                            : ''}
-                          {` · Rest ${exItem.rest_seconds ?? DEFAULT_REST_SECONDS}s`}
-                          {phase === 'done' ? ' · Ready to advance' : ''}
-                        </Text>
-                      ) : null}
-                    </View>
-
-                    {isCurrent ? (
-                      <Pressable
-                        onPress={handleAdapt}
-                        disabled={phase === 'resting' || !canAdapt}
-                        className={`rounded-xl border px-3 py-2 active:opacity-80 ${
-                          canAdapt
-                            ? 'border-matte-gold/30 bg-matte-gold/10'
-                            : 'border-white/10 bg-white/5 opacity-40'
-                        }`}
-                      >
-                        <Text className="font-body text-[10px] uppercase tracking-[0.2em] text-matte-gold">
-                          Adapt
-                        </Text>
-                      </Pressable>
-                    ) : null}
-                  </View>
-
-                  {isCurrent && canAdapt && activeLibrary ? (
-                    <Text className="mt-3 font-body text-xs text-[#6B7568]">
-                      Swap ready ·{' '}
-                      {getExerciseById(catalog, exercise.alternative_exercise_id!)?.name ??
-                        'alternative'}
+                <View className="flex-row items-start justify-between">
+                  <View className="flex-1 pr-3">
+                    <Text className="font-body text-[10px] uppercase tracking-[0.35em] text-[#6B7568]">
+                      Movement {index + 1} of {exerciseQueue.length}
+                      {isActive ? ' · active' : ''}
                     </Text>
+                    <Text className="mt-2 font-body text-sm text-[#8A9488]">
+                      {queuedExercise.target_rep_range}
+                    </Text>
+                    <Text className="mt-1 font-body text-[10px] uppercase tracking-[0.25em] text-[#6B7568]">
+                      {queuedExercise.target_sets} sets × {queuedExercise.target_reps} reps
+                      {queuedExercise.execution_technique
+                        ? ` · ${queuedExercise.execution_technique}`
+                        : ''}
+                      {isActive
+                        ? ` · Set ${Math.min(currentSet, totalSets)}/${totalSets}`
+                        : ''}
+                      {isActive && phase === 'done' ? ' · Ready to advance' : ''}
+                    </Text>
+                  </View>
+                  {isActive ? (
+                    <Pressable
+                      onPress={handleAdapt}
+                      disabled={phase === 'resting' || !itemCanAdapt}
+                      className={`rounded-xl border px-3 py-2 active:opacity-80 ${
+                        itemCanAdapt
+                          ? 'border-matte-gold/30 bg-matte-gold/10'
+                          : 'border-white/10 bg-white/5 opacity-40'
+                      }`}
+                    >
+                      <Text className="font-body text-[10px] uppercase tracking-[0.2em] text-matte-gold">
+                        Adapt
+                      </Text>
+                    </Pressable>
                   ) : null}
                 </View>
 
-                {/* ExerciseCueCard rendered for every exercise in the routine */}
+                {isActive ? (
+                  <ModularMovementPlayer
+                    url={queuedLibrary?.visual_asset_url}
+                    type={queuedLibrary?.visual_asset_type}
+                    movementName={queuedExercise.name}
+                    subtitle={queuedExercise.target_rep_range}
+                    accent="gold"
+                    height={196}
+                  />
+                ) : null}
+
+                {isActive ? (
+                  <TargetLoadBanner
+                    targetKg={targetLoadKg}
+                    repRange={queuedExercise.target_rep_range}
+                    source={targetLoadSource}
+                  />
+                ) : null}
+
                 <ExerciseCueCard
-                  instructions={exItem.instructions ?? {}}
-                  progressionNote={exItem.progression_note}
-                  biomechanics={exBiomechanics}
+                  instructions={queuedExercise.instructions ?? {}}
+                  progressionNote={queuedExercise.progression_note}
+                  biomechanics={biomechanicsFromLibrary(queuedLibrary)}
                 />
 
-                {/* Set-logging controls are scoped to the current active exercise */}
-                {isCurrent ? (
-                  <View className="gap-4 px-5 pb-5 pt-2">
+                {isActive ? (
+                  <>
+                    {itemCanAdapt && activeLibrary ? (
+                      <Text className="font-body text-xs text-[#6B7568]">
+                        Swap ready ·{' '}
+                        {getExerciseById(catalog, queuedExercise.alternative_exercise_id!)?.name ??
+                          'alternative'}
+                      </Text>
+                    ) : null}
+
                     <ValueStepper
                       label="Load"
                       value={weight}
@@ -461,12 +527,23 @@ export default function IronModeScreen() {
                         ))}
                       </View>
                     ) : null}
-                  </View>
+
+                    {canAdvanceExercise ? (
+                      <Pressable
+                        onPress={advanceToNextExercise}
+                        className="overflow-hidden rounded-2xl border border-matte-gold/40 bg-matte-gold/10 px-8 py-4 active:opacity-80"
+                      >
+                        <Text className="text-center font-body-medium text-sm uppercase tracking-[0.35em] text-matte-gold">
+                          Next movement →
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </>
                 ) : null}
-              </View>
+              </Pressable>
             );
-          })}
-        </ScrollView>
+          }}
+        />
 
         {canLogSet ? (
           <Pressable

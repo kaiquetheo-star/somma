@@ -1,69 +1,14 @@
-import { Pressable, Text, TextInput, View } from 'react-native';
+import { Text, TextInput, View } from 'react-native';
 
+import { PillarGoalSelect } from '@/components/foundation/PillarGoalSelect';
+import { TrainingFrequencySelect } from '@/components/foundation/TrainingFrequencySelect';
 import { ValueStepper } from '@/components/iron/ValueStepper';
 import { RpeSelector } from '@/components/combat/RpeSelector';
-import type { BiologicalProfile, CombatGoal, FlowGoal, IronGoal, SpiritGoal } from '@/types/biological';
-import {
-  COMBAT_GOALS,
-  FLOW_GOALS,
-  IRON_GOALS,
-  SPIRIT_GOALS,
-} from '@/types/biological';
+import type { BiologicalProfile, PillarGoalKey } from '@/types/biological';
 
 interface BiologicalPassportFormProps {
   value: BiologicalProfile;
   onChange: (patch: Partial<BiologicalProfile>) => void;
-}
-
-interface GoalPickerProps<T extends string> {
-  label: string;
-  pillarAccent: string;
-  options: readonly T[];
-  value: T | null;
-  onSelect: (goal: T | null) => void;
-}
-
-function GoalPicker<T extends string>({
-  label,
-  pillarAccent,
-  options,
-  value,
-  onSelect,
-}: GoalPickerProps<T>) {
-  return (
-    <View className="gap-3">
-      <Text className="font-body text-[10px] uppercase tracking-[0.35em] text-[#6B7568]">
-        {label}
-      </Text>
-      <View className="flex-row flex-wrap gap-2">
-        {options.map((option) => {
-          const isSelected = value === option;
-          return (
-            <Pressable
-              key={option}
-              onPress={() => onSelect(isSelected ? null : option)}
-              accessibilityRole="radio"
-              accessibilityState={{ checked: isSelected }}
-              accessibilityLabel={`${label}: ${option}`}
-              className={`rounded-xl border px-4 py-2 active:opacity-75 ${
-                isSelected
-                  ? `border-${pillarAccent}/50 bg-${pillarAccent}/15`
-                  : 'border-white/10 bg-white/[0.04]'
-              }`}
-            >
-              <Text
-                className={`font-body text-xs ${
-                  isSelected ? `text-${pillarAccent}` : 'text-[#8A9488]'
-                }`}
-              >
-                {option}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-    </View>
-  );
 }
 
 export function BiologicalPassportForm({ value, onChange }: BiologicalPassportFormProps) {
@@ -160,49 +105,26 @@ export function BiologicalPassportForm({ value, onChange }: BiologicalPassportFo
         </Text>
       </View>
 
-      {/* ── Pillar Goals ─────────────────────────────────────────────────── */}
-      <View className="gap-1">
-        <Text className="font-body text-[10px] uppercase tracking-[0.4em] text-matte-gold/70">
-          Pillar Goals
+      <TrainingFrequencySelect
+        value={value.training_days_per_week}
+        onChange={(training_days_per_week) => onChange({ training_days_per_week })}
+      />
+
+      <View className="gap-6 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-5">
+        <Text className="font-body text-[10px] uppercase tracking-[0.35em] text-matte-gold/70">
+          Pillar goals
         </Text>
         <Text className="font-body text-xs leading-5 text-[#6B7568]">
-          Each coach uses your declared objective to bias exercise selection,
-          round structure, and recovery focus. Tap to select — tap again to clear.
+          Each specialist coach uses these targets when building your daily protocol.
         </Text>
-      </View>
-
-      <View className="gap-6 rounded-2xl border border-white/[0.07] bg-white/[0.03] px-4 py-5">
-        <GoalPicker<IronGoal>
-          label="Iron · Strength training goal"
-          pillarAccent="matte-gold"
-          options={IRON_GOALS}
-          value={value.goal_iron}
-          onSelect={(goal_iron) => onChange({ goal_iron })}
-        />
-
-        <GoalPicker<CombatGoal>
-          label="Combat · Blood & Bone goal"
-          pillarAccent="blood-red"
-          options={COMBAT_GOALS}
-          value={value.goal_combat}
-          onSelect={(goal_combat) => onChange({ goal_combat })}
-        />
-
-        <GoalPicker<FlowGoal>
-          label="Flow · Mobility & movement goal"
-          pillarAccent="[#8A9488]"
-          options={FLOW_GOALS}
-          value={value.goal_flow}
-          onSelect={(goal_flow) => onChange({ goal_flow })}
-        />
-
-        <GoalPicker<SpiritGoal>
-          label="Spirit · Breathwork & mind goal"
-          pillarAccent="[#5B7A6E]"
-          options={SPIRIT_GOALS}
-          value={value.goal_spirit}
-          onSelect={(goal_spirit) => onChange({ goal_spirit })}
-        />
+        {(['iron', 'combat', 'flow', 'spirit'] as PillarGoalKey[]).map((pillar) => (
+          <PillarGoalSelect
+            key={pillar}
+            pillar={pillar}
+            value={value[`goal_${pillar}`]}
+            onChange={(goal) => onChange({ [`goal_${pillar}`]: goal })}
+          />
+        ))}
       </View>
     </View>
   );

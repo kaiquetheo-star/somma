@@ -138,8 +138,7 @@ export function useCombatInterval({
     }
 
     if (phase === 'rest') {
-      const nextRoundIndex = currentRound;
-      const nextRound = schedule[nextRoundIndex];
+      const nextRound = schedule[currentRound];
       setCurrentRound((r) => r + 1);
       setPhase('work');
       armPhaseDeadline(nextRound?.workSeconds ?? workSeconds);
@@ -317,6 +316,7 @@ export function useCombatInterval({
 
   return {
     phase,
+    schedule,
     /** @deprecated use currentRound */
     round: currentRound,
     currentRound,

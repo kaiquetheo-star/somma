@@ -1,3 +1,9 @@
+import {
+  dateForDayIndex,
+  getDayIndexForDate,
+  getWeekStartMonday,
+} from '@/lib/gameplan/microcycleWeek';
+import { isDegenerateMicrocycle } from '@/lib/gameplan/microcycleValidation';
 import type {
   CombatBlockPrescription,
   CombatRoundStructureEntry,
@@ -5,6 +11,7 @@ import type {
   DailyGameplan,
   GameplanBlock,
   IronBlockPrescription,
+  MicrocycleDay,
   SpiritBlockPrescription,
   WorkoutPillar,
 } from '@/types/gameplan';
@@ -205,7 +212,7 @@ function parseSpiritPrescription(raw: unknown): SpiritBlockPrescription | undefi
   const record = raw as Record<string, unknown>;
   const mode = record.mode === 'flow' ? 'flow' : 'breathwork';
 
-  const asanasRaw = record.asanas;
+  const asanasRaw = record.asanas ?? record.sequence;
   const asanas = Array.isArray(asanasRaw)
     ? asanasRaw.flatMap((item, index) => {
         if (!item || typeof item !== 'object') return [];
@@ -253,6 +260,7 @@ function parseSpiritPrescription(raw: unknown): SpiritBlockPrescription | undefi
         record.recovery_focus_zones ?? record.recovery_zones,
       ),
       asanas,
+      sequence: asanas,
     };
   }
 
@@ -271,14 +279,10 @@ function parseSpiritPrescription(raw: unknown): SpiritBlockPrescription | undefi
   };
 }
 
-export function parseDailyGameplanPayload(payload: unknown): DailyGameplan | null {
-  if (!payload || typeof payload !== 'object') return null;
+export function parseGameplanBlocks(blocksRaw: unknown): GameplanBlock[] {
+  if (!Array.isArray(blocksRaw)) return [];
 
-  const record = payload as Record<string, unknown>;
-  const blocksRaw = record.blocks;
-  if (!Array.isArray(blocksRaw) || blocksRaw.length === 0) return null;
-
-  const blocks = blocksRaw.flatMap((item, index): GameplanBlock[] => {
+  return blocksRaw.flatMap((item, index): GameplanBlock[] => {
     if (!item || typeof item !== 'object') return [];
     const block = item as Record<string, unknown>;
     if (!isWorkoutPillar(block.pillar)) return [];
@@ -304,13 +308,166 @@ export function parseDailyGameplanPayload(payload: unknown): DailyGameplan | nul
 
     return [parsed];
   });
+}
 
-  if (blocks.length === 0) return null;
+function parseMicrocycleDay(
+  raw: unknown,
+  weekStartDate: string,
+): MicrocycleDay | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const row = raw as Record<string, unknown>;
+  const dayIndex =
+    typeof row.day_index === 'number'
+      ? Math.min(7, Math.max(1, Math.round(row.day_index)))
+      : null;
+  if (dayIndex == null) return null;
+
+  const isRestDay = row.is_rest_day === true;
+  const focusLabel =
+    typeof row.focus_label === 'string' && row.focus_label.trim()
+      ? row.focus_label.trim()
+      : isRestDay
+        ? 'Rest & Recovery'
+        : 'Training Day';
+
+  const blocks = isRestDay ? [] : parseGameplanBlocks(row.blocks);
 
   return {
-    date: typeof record.date === 'string' ? record.date : new Date().toISOString().slice(0, 10),
+    day_index: dayIndex,
+    is_rest_day: isRestDay,
+    is_completed: row.is_completed === true ? true : undefined,
+    focus_label: focusLabel,
+    date: dateForDayIndex(weekStartDate, dayIndex),
     blocks,
-    generated_at:
-      typeof record.generated_at === 'string' ? record.generated_at : new Date().toISOString(),
+  };
+}
+
+function normalizeMicrocycle(
+  days: MicrocycleDay[],
+  weekStartDate: string,
+): MicrocycleDay[] {
+  const byIndex = new Map(days.map((day) => [day.day_index, day]));
+  return Array.from({ length: 7 }, (_, index) => {
+    const dayIndex = index + 1;
+    const existing = byIndex.get(dayIndex);
+    if (existing) {
+      return {
+        ...existing,
+        is_completed: existing.is_completed,
+        date: dateForDayIndex(weekStartDate, dayIndex),
+      };
+    }
+    return {
+      day_index: dayIndex,
+      is_rest_day: true,
+      focus_label: 'Rest & Recovery',
+      date: dateForDayIndex(weekStartDate, dayIndex),
+      blocks: [],
+    };
+  });
+}
+
+function blocksForDate(
+  microcycle: MicrocycleDay[],
+  dateKey: string,
+  weekStartDate: string,
+): GameplanBlock[] {
+  const dayIndex = getDayIndexForDate(dateKey, weekStartDate);
+  return microcycle.find((day) => day.day_index === dayIndex)?.blocks ?? [];
+}
+
+export function parseDailyGameplanPayload(payload: unknown): DailyGameplan | null {
+  if (!payload || typeof payload !== 'object') return null;
+
+  const record = payload as Record<string, unknown>;
+
+  if (typeof record.error === 'string' && record.error.trim()) {
+    console.error('[SOMMA] parseDailyGameplanPayload: edge error field', {
+      error: record.error,
+      message: record.message,
+      catalog_counts: record.catalog_counts,
+    });
+    return null;
+  }
+  const date =
+    typeof record.date === 'string' ? record.date : new Date().toISOString().slice(0, 10);
+  const generated_at =
+    typeof record.generated_at === 'string' ? record.generated_at : new Date().toISOString();
+
+  const week_start_date =
+    typeof record.week_start_date === 'string'
+      ? record.week_start_date
+      : getWeekStartMonday(date);
+
+  const training_days_per_week =
+    typeof record.training_days_per_week === 'number'
+      ? Math.min(7, Math.max(1, Math.round(record.training_days_per_week)))
+      : undefined;
+
+  const microcycleRaw = record.microcycle;
+  if (Array.isArray(microcycleRaw) && microcycleRaw.length > 0) {
+    const parsedDays = microcycleRaw.flatMap((day) => {
+      const parsed = parseMicrocycleDay(day, week_start_date);
+      return parsed ? [parsed] : [];
+    });
+
+    if (parsedDays.length === 0) return null;
+
+    const microcycle = normalizeMicrocycle(parsedDays, week_start_date);
+    const expectedTraining =
+      training_days_per_week ??
+      (typeof record.training_days_per_week === 'number'
+        ? Math.min(7, Math.max(1, Math.round(record.training_days_per_week)))
+        : undefined);
+
+    if (isDegenerateMicrocycle(microcycle, expectedTraining)) {
+      console.error('[SOMMA] parseDailyGameplanPayload: rejected degenerate microcycle', {
+        expectedTrainingDays: expectedTraining,
+        days: microcycle.map((day) => ({
+          day_index: day.day_index,
+          is_rest_day: day.is_rest_day,
+          blockCount: day.blocks.length,
+        })),
+      });
+      return null;
+    }
+
+    const blocks = blocksForDate(microcycle, date, week_start_date);
+
+    return {
+      date,
+      week_start_date,
+      training_days_per_week,
+      microcycle,
+      blocks,
+      generated_at,
+    };
+  }
+
+  const blocksRaw = record.blocks;
+  if (!Array.isArray(blocksRaw) || blocksRaw.length === 0) return null;
+
+  const blocks = parseGameplanBlocks(blocksRaw);
+  if (blocks.length === 0) return null;
+
+  const todayIndex = getDayIndexForDate(date, week_start_date);
+  const microcycle: MicrocycleDay[] = Array.from({ length: 7 }, (_, index) => {
+    const day_index = index + 1;
+    const isToday = day_index === todayIndex;
+    return {
+      day_index,
+      is_rest_day: !isToday,
+      focus_label: isToday ? 'Legacy daily protocol' : 'Rest & Recovery',
+      date: dateForDayIndex(week_start_date, day_index),
+      blocks: isToday ? blocks : [],
+    };
+  });
+
+  return {
+    date,
+    week_start_date,
+    microcycle,
+    blocks,
+    generated_at,
   };
 }

@@ -1,26 +1,14 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
-
-const corsHeaders: Record<string, string> = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers':
-    'authorization, x-client-info, apikey, content-type, x-supabase-api-version, prefer',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Max-Age': '86400',
-};
-
-function corsResponse(body: string | null, status: number, extraHeaders?: Record<string, string>) {
-  return new Response(body, {
-    status,
-    headers: {
-      ...corsHeaders,
-      ...extraHeaders,
-    },
-  });
-}
+import { corsHeaders } from '../_shared/cors.ts';
+import {
+  estimateBestE1RMFromLogs,
+  targetWeightFromE1RM,
+} from '../_shared/rmCalculator.ts';
 
 function jsonResponse(body: unknown, status = 200) {
-  return corsResponse(JSON.stringify(body), status, {
-    'Content-Type': 'application/json',
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });
 }
 
@@ -42,7 +30,9 @@ interface BiologicalPassport {
   body_fat_percentage: number | null;
   current_injuries: string | null;
   baseline_stress_level: number | null;
-  /** Per-pillar training goals declared by the user — fed into each coach's CoT step */
+}
+
+interface PillarGoals {
   goal_iron: string | null;
   goal_combat: string | null;
   goal_flow: string | null;
@@ -57,10 +47,18 @@ interface ProfileRow {
   body_fat_percentage: number | null;
   current_injuries: string | null;
   baseline_stress_level: number | null;
+  training_days_per_week: number | null;
   goal_iron: string | null;
   goal_combat: string | null;
   goal_flow: string | null;
   goal_spirit: string | null;
+}
+
+interface MicrocycleDayPayload {
+  day_index: number;
+  is_rest_day: boolean;
+  focus_label: string;
+  blocks: GameplanBlockPayload[];
 }
 
 interface LibraryExercise {
@@ -236,6 +234,8 @@ interface SpiritPrescription {
   prescribed_reason: string;
   recovery_focus_zones?: string[];
   asanas?: FlowAsanaPrescription[];
+  /** AI alias for ordered flow items — sanitized into `asanas` */
+  sequence?: Partial<FlowAsanaPrescription>[];
 }
 
 interface LibraryFlowSpiritRow {
@@ -310,6 +310,10 @@ interface GameplanBlockPayload {
 }
 
 interface AiBlueprintResponse {
+  week_start_date?: string;
+  training_days_per_week?: number;
+  microcycle?: MicrocycleDayPayload[];
+  /** @deprecated legacy single-day — use microcycle */
   blocks?: GameplanBlockPayload[];
   error?: string;
   message?: string;
@@ -379,7 +383,7 @@ const FALLBACK_BLOCKS: GameplanBlockPayload[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// System prompt — Multiple Experts (Chess Master over fixed catalogs)
+// System prompt — SOMMA Longevity Clinic (multidisciplinary CoT orchestration)
 // ---------------------------------------------------------------------------
 
 function ageFromDateOfBirth(dateOfBirth: string | null): number | null {
@@ -403,11 +407,91 @@ function mapBiologicalPassport(profile: ProfileRow | null): BiologicalPassport {
     current_injuries: profile?.current_injuries ?? null,
     baseline_stress_level:
       profile?.baseline_stress_level != null ? Number(profile.baseline_stress_level) : null,
-    goal_iron: profile?.goal_iron ?? null,
-    goal_combat: profile?.goal_combat ?? null,
-    goal_flow: profile?.goal_flow ?? null,
-    goal_spirit: profile?.goal_spirit ?? null,
   };
+}
+
+function mapPillarGoals(profile: ProfileRow | null): PillarGoals {
+  const text = (value: string | null | undefined) =>
+    typeof value === 'string' && value.trim() ? value.trim() : null;
+  return {
+    goal_iron: text(profile?.goal_iron),
+    goal_combat: text(profile?.goal_combat),
+    goal_flow: text(profile?.goal_flow),
+    goal_spirit: text(profile?.goal_spirit),
+  };
+}
+
+function formatPillarGoal(goal: string | null, fallback: string): string {
+  return goal?.trim() ? goal.trim() : fallback;
+}
+
+function clampTrainingDaysPerWeek(value: number | null | undefined): number {
+  if (value == null || !Number.isFinite(value)) return 4;
+  return Math.min(7, Math.max(1, Math.round(value)));
+}
+
+function getWeekStartMonday(dateKey: string): string {
+  const date = new Date(`${dateKey}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return dateKey;
+  const day = date.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  date.setDate(date.getDate() + diff);
+  return date.toISOString().slice(0, 10);
+}
+
+function getDayIndexForDate(dateKey: string, weekStartDate: string): number {
+  const date = new Date(`${dateKey}T12:00:00`);
+  const start = new Date(`${weekStartDate}T12:00:00`);
+  if (Number.isNaN(date.getTime()) || Number.isNaN(start.getTime())) return 1;
+  const diffDays = Math.round((date.getTime() - start.getTime()) / (24 * 60 * 60 * 1000));
+  return Math.min(7, Math.max(1, diffDays + 1));
+}
+
+function spreadTrainingDayIndices(trainingDaysPerWeek: number): number[] {
+  const count = clampTrainingDaysPerWeek(trainingDaysPerWeek);
+  if (count >= 7) return [1, 2, 3, 4, 5, 6, 7];
+  const indices = new Set<number>();
+  for (let i = 0; i < count; i += 1) {
+    const index =
+      count === 1
+        ? 4
+        : Math.min(7, Math.max(1, Math.round(1 + (6 * i) / (count - 1))));
+    indices.add(index);
+  }
+  for (let day = 1; day <= 7 && indices.size < count; day += 1) {
+    indices.add(day);
+  }
+  return [...indices].sort((a, b) => a - b);
+}
+
+const MICROCYCLE_FOCUS_ROTATIONS: Record<number, string[]> = {
+  3: ['Iron: Full Body A', 'Iron: Full Body B', 'Iron: Full Body C'],
+  4: ['Iron: Upper', 'Iron: Lower', 'Combat: Conditioning', 'Iron: Full Body'],
+  5: ['Iron: Push', 'Iron: Pull', 'Iron: Legs', 'Combat: Technical', 'Iron: Upper'],
+  6: [
+    'Iron: Push',
+    'Iron: Pull',
+    'Iron: Legs',
+    'Iron: Push',
+    'Iron: Pull',
+    'Iron: Legs',
+  ],
+  7: [
+    'Iron: Push',
+    'Iron: Pull',
+    'Iron: Legs',
+    'Combat: Footwork',
+    'Iron: Upper',
+    'Iron: Lower',
+    'Spirit: Active Recovery',
+  ],
+};
+
+function focusLabelForTrainingSlot(trainingDaysPerWeek: number, slot: number): string {
+  const rotation =
+    MICROCYCLE_FOCUS_ROTATIONS[clampTrainingDaysPerWeek(trainingDaysPerWeek)] ??
+    MICROCYCLE_FOCUS_ROTATIONS[4]!;
+  return rotation[slot % rotation.length]!;
 }
 
 const SPIRIT_SLUG_TO_TEMPO_ID: Record<string, string> = {
@@ -417,7 +501,12 @@ const SPIRIT_SLUG_TO_TEMPO_ID: Record<string, string> = {
   nsdr_body_scan: 'tempo_nsdr',
 };
 
-function buildSystemPrompt(biological: BiologicalPassport, availableAssetsTag: string): string {
+function buildSystemPrompt(
+  biological: BiologicalPassport,
+  pillarGoals: PillarGoals,
+  trainingDaysPerWeek: number,
+  availableAssetsTag: string,
+): string {
   const injuryRule = biological.current_injuries?.trim()
     ? `ACTIVE INJURY CONSTRAINTS (mandatory): "${biological.current_injuries.trim()}". The server has already removed conflicting joint_stress_profile tags from the routine; you must NOT prescribe any exercise_id not in iron_expert.routine_exercise_ids.`
     : 'No active injuries reported — still use RIR and conservative technique selection.';
@@ -439,20 +528,33 @@ function buildSystemPrompt(biological: BiologicalPassport, availableAssetsTag: s
       ? `Athlete age: ${biological.age_years} years. Older athletes: bias 2–3 RIR, avoid Cluster Sets unless mesocycle load progression is clear.`
       : 'Age unknown — default to 2 RIR and Standard technique.';
 
-  return `You are the Head Coach of the SOMMA Longevity Clinic. You must assemble a daily protocol by orchestrating three specialized coaches. Follow these steps strictly internally before outputting the JSON:
+  return `You are the Head Coach of the SOMMA Longevity Clinic. You plan a full 7-DAY MICROCYCLE (Monday–Sunday), not isolated random workouts. Orchestrate three specialized coaches across the week.
 
-STEP 1 (Head Coach): Analyze the user's Biological Passport (weight, stress, injuries) and the recent \`performance_logs\`. Determine the global fatigue level.
-STEP 2 (Iron Coach): Select a logical sequence of exercises from <AVAILABLE_ASSETS> based on Step 1. Apply progressive overload.
-STEP 3 (Combat Coach): Look at the Iron Coach's selection. If Iron heavily taxed the legs, the Combat sequence MUST focus on Boxing (upper body/head movement). If Iron taxed the upper body, Combat MUST focus on Muay Thai kicks and knees.
-STEP 4 (Flow/Spirit Coach): Look at Steps 2 and 3. Select recovery poses from <AVAILABLE_ASSETS> that directly decompress the targeted muscles.
+MICROCYCLE LAW (mandatory):
+- Read \`training_days_per_week\` from the user payload (currently ${trainingDaysPerWeek}).
+- Output \`microcycle\` with EXACTLY 7 objects: day_index 1 (Monday) through 7 (Sunday).
+- Exactly ${trainingDaysPerWeek} days MUST have is_rest_day: false; the other ${7 - trainingDaysPerWeek} days MUST be is_rest_day: true with focus_label "Rest & Recovery" and blocks: [].
+- Distribute training stress intelligently: no heavy squats/hinges on consecutive days; alternate push/pull/legs for 5–6 day splits; full-body spacing for 3 day splits.
+- Each training day includes a clear focus_label (e.g. "Iron: Push & Core", "Combat: Footwork", "Spirit: Active Recovery").
+- On training days, populate \`blocks\` with full pillar prescriptions (iron exercises[], combat rounds[], spirit sequence[]).
 
-Constraint: The output MUST be a valid JSON containing the full arrays for \`exercises\`, \`rounds\`, and \`sequence\` representing the complete workout, not just a single item.
+STEP 1 (Head Coach): Analyze Biological Passport + \`performance_logs\`. Set global fatigue and weekly split strategy from training_days_per_week.
 
-You are FORBIDDEN from suggesting any exercise or movement NOT present in the <AVAILABLE_ASSETS> list. If you do not have enough data, return a structured error JSON object {"error":"INSUFFICIENT_CATALOG","message":"..."} — do NOT invent movements.
+STEP 2 (Iron Coach): For each iron training day, prescribe full \`exercises\` arrays from <AVAILABLE_ASSETS> with progressive overload.
+
+STEP 3 (Combat Coach): On combat days, respect prior-day muscle tax — legs heavy → Boxing upper-body focus; upper heavy → Muay Thai kicks/knees.
+
+STEP 4 (Flow/Spirit Coach): Place recovery / flow on lighter days and after hard combat or leg iron — full \`sequence\` arrays.
+
+Constraint: Valid JSON with complete arrays per training day — never a single exercise, round, or pose.
+
+CHAIN-OF-THOUGHT RULE: Execute STEPS 1 → 4 internally for all 7 days. Do NOT output reasoning — return ONLY the final JSON object.
+
+CATALOG LAW: You are FORBIDDEN from suggesting any exercise, combo, or movement NOT present in <AVAILABLE_ASSETS>. If data is insufficient, return {"error":"INSUFFICIENT_CATALOG","message":"..."} — never invent movements.
 
 ${availableAssetsTag}
 
-BIOLOGICAL PASSPORT (authoritative — used in STEP 1):
+BIOLOGICAL PASSPORT (STEP 1 — authoritative; also in user payload):
 - ${ageRule}
 - ${weightRule}
 - Height cm: ${biological.height_cm ?? 'unknown'}
@@ -461,90 +563,61 @@ BIOLOGICAL PASSPORT (authoritative — used in STEP 1):
 - ${stressRule}
 - ${injuryRule}
 
-PILLAR GOALS (declared by the user — each coach MUST honour their specific goal):
-- Iron goal: ${biological.goal_iron ?? 'not specified (use pillar-weight heuristics)'}
-- Combat goal: ${biological.goal_combat ?? 'not specified (use pillar-weight heuristics)'}
-- Flow goal: ${biological.goal_flow ?? 'not specified (use pillar-weight heuristics)'}
-- Spirit goal: ${biological.goal_spirit ?? 'not specified (use pillar-weight heuristics)'}
+PILLAR GOALS (user intent — each coach MUST honor their line):
+- Iron Coach (STEP 2): ${formatPillarGoal(pillarGoals.goal_iron, 'Not specified — align with focus_preference iron weight')}
+- Combat Coach (STEP 3): ${formatPillarGoal(pillarGoals.goal_combat, 'Not specified — align with focus_preference combat weight')}
+- Flow Coach (STEP 4): ${formatPillarGoal(pillarGoals.goal_flow, 'Not specified — align with focus_preference flow weight')}
+- Spirit Coach (STEP 4): ${formatPillarGoal(pillarGoals.goal_spirit, 'Not specified — align with focus_preference spirit weight')}
+
+STEP 1 — HEAD COACH (global fatigue synthesis):
+- Read user payload \`performance_logs\` (recent pillar sessions: iron sets, combat rounds, spirit/flow) and \`expert_context\` summaries.
+- Classify global fatigue: low | moderate | high | overreached.
+- Note dominant taxonomies from last 48–72h: lower-body vs upper-body vs systemic CNS.
+- Honor injuries and baseline_stress_level when setting autoregulation for all downstream coaches.
+- Pass a clear fatigue verdict (internal only) to Steps 2–4.
 
 GLOBAL LAWS (violation = invalid response):
-1. <AVAILABLE_ASSETS> is the authoritative movement catalog — every exercise_id, combo_id, asana_id, and tempo_id MUST exist in that list. expert_context narrows choices but NEVER adds IDs.
-2. Every exercise_id MUST appear in iron_expert.routine_exercise_ids AND in <AVAILABLE_ASSETS>.exercises. Every combo_id in combat_expert.allowed_combo_ids AND in <AVAILABLE_ASSETS>.combat. Flow asanas from <AVAILABLE_ASSETS>.flow only. Breathwork tempo_id from <AVAILABLE_ASSETS>.spirit_breathwork only.
-3. NEVER output exercise names or combo names as identifiers — IDs only in prescription fields.
-4. Iron block MUST include exactly one entry per id in iron_expert.routine_exercise_ids, same order. Do NOT add/remove/reorder iron exercises.
-5. Use iron_expert.catalog_dictionary for primary_muscle, cns_fatigue_cost, joint_stress_profile — scientific decisions only from this data.
-6. Return ONLY valid JSON. No markdown. If catalogs cannot support a block, return {"error":"INSUFFICIENT_CATALOG","message":"..."} instead of blocks.
+1. <AVAILABLE_ASSETS> is the authoritative catalog — every exercise_id, combo_id, asana_id, and tempo_id MUST exist there. expert_context narrows choices but NEVER adds IDs.
+2. NEVER output names as identifiers — UUIDs only in prescription fields.
+3. microcycle.length MUST equal 7 with day_index 1..7 each appearing once.
+4. Iron blocks: full \`exercises\` array per iron_expert.routine_exercise_ids order on iron days.
+5. Combat blocks: full \`rounds\` + \`rounds_structure\` on combat days.
+6. Flow blocks: full \`sequence\` (and duplicate \`asanas\`) on flow days — 4–7 items.
+7. Rest days: is_rest_day true, blocks [].
+8. Return ONLY valid JSON. No markdown. No commentary outside JSON.
 
 OUTPUT SCHEMA:
 {
-  "blocks": [
+  "week_start_date": "YYYY-MM-DD (Monday of this plan)",
+  "training_days_per_week": ${trainingDaysPerWeek},
+  "microcycle": [
     {
-      "id": "string",
-      "pillar": "iron" | "combat" | "spirit",
-      "title": "string",
-      "subtitle": "string",
-      "duration_minutes": number,
-      "order": number,
-      "iron": {
-        "routine_id": "string",
-        "exercises": [
-          {
-            "exercise_id": "uuid (iron_expert.routine_exercise_ids only)",
-            "target_sets": number,
-            "target_reps": number,
-            "target_rep_range": "string e.g. 8-10 @ 2 RIR",
-            "target_rir": number,
-            "target_weight_kg": number | null,
-            "rest_seconds": number,
-            "alternative_exercise_id": "uuid | null (catalog; same primary_muscle; cns <= current)",
-            "progression_note": "string",
-            "execution_technique": "Standard" | "Myo-Reps" | "Rest-Pause" | "Slow Eccentric (4s)" | "Drop Set" | "Cluster Sets"
-          }
-        ]
-      },
-      "combat": {
-        "rounds_structure": [{
-          "round_start": number,
-          "round_end": number,
-          "tactical_focus": "footwork_range" | "power_inside" | "defense_counter" | "burnout",
-          "coach_intent": "string (short coaching note for this segment)"
-        }],
-        "rounds": [{
-          "round_index": number,
-          "combo_id": "uuid (combat_expert.allowed_combo_ids only)",
-          "work_seconds": number,
-          "rest_seconds": number,
-          "tactical_focus": "footwork_range" | "power_inside" | "defense_counter" | "burnout"
-        }]
-      },
-      "spirit": {
-        "mode": "flow" | "breathwork",
-        "tempo_id": "string (breathwork only — spirit_expert.allowed_tempo_ids)",
-        "duration_minutes": number,
-        "prescribed_reason": "string",
-        "recovery_focus_zones": ["lower_back", "hips", ...],
-        "asanas": [{
-          "asana_id": "uuid (flow catalog only)",
+      "day_index": 1,
+      "is_rest_day": false,
+      "focus_label": "Iron: Push & Core",
+      "blocks": [
+        {
+          "id": "string",
+          "pillar": "iron" | "combat" | "spirit",
+          "title": "string",
+          "subtitle": "string",
+          "duration_minutes": number,
           "order": number,
-          "hold_seconds": number
-        }]
-      }
+          "iron": { "routine_id": "string", "exercises": [ { "exercise_id": "uuid", "target_sets": number, "target_reps": number, "target_rep_range": "string", "target_rir": number, "target_weight_kg": number | null, "rest_seconds": number, "alternative_exercise_id": "uuid | null", "progression_note": "string", "execution_technique": "Standard" | "Myo-Reps" | "Rest-Pause" | "Slow Eccentric (4s)" | "Drop Set" | "Cluster Sets" } ] },
+          "combat": { "rounds_structure": [ { "round_start": number, "round_end": number, "tactical_focus": "footwork_range" | "power_inside" | "defense_counter" | "burnout", "coach_intent": "string" } ], "rounds": [ { "round_index": number, "combo_id": "uuid", "work_seconds": number, "rest_seconds": number, "tactical_focus": "footwork_range" | "power_inside" | "defense_counter" | "burnout" } ] },
+          "spirit": { "mode": "flow" | "breathwork", "tempo_id": "string", "duration_minutes": number, "prescribed_reason": "string", "recovery_focus_zones": ["lower_back", "hips"], "sequence": [ { "asana_id": "uuid", "order": number, "hold_seconds": number } ], "asanas": [ { "asana_id": "uuid", "order": number, "hold_seconds": number } ] }
+        }
+      ]
     }
   ]
 }
 
-STEP 2 DETAIL — IRON COACH (Elite Hypertrophy / Bodybuilding Coach):
-
-IRON GOAL DIRECTIVE (from Biological Passport):
-- User declared goal: "${biological.goal_iron ?? 'not specified'}"
-- Hypertrophy → bias 8–12 rep ranges, 2 RIR, Slow Eccentric on stretch movements, MEV→MRV volume progression.
-- Strength → bias 3–6 rep ranges, 1–2 RIR, longer rest (150–180s), heavy compound prioritisation, Cluster Sets on CNS ≤ 3 when stress low.
-- Endurance → bias 15–20 rep ranges, 1 RIR, shorter rest (60–75s), Myo-Reps on isolation, reduce compound sets to 3.
-- Recomposition → moderate reps (10–15), 2 RIR, mix compounds + isolation, keep rest ≤ 105s.
-- Not specified → default to Hypertrophy protocol if mesocycle and stress allow.
+STEP 2 — IRON COACH (apply after Step 1 fatigue verdict):
+- Primary mandate: fulfill the user's Iron goal above (e.g. Hypertrophy → volume & 8–12 @ 2 RIR; Strength → lower reps, higher load, longer rest on compounds).
 
 MESOCYCLE (21-day window — iron_expert.mesocycle):
 - Read iron_expert.performance_history_3w and iron_expert.mesocycle.per_exercise summaries.
+- Compute target_weight_kg from Epley E1RM: 1RM = weight × (1 + reps / 30). Hypertrophy goal → 70–80% 1RM; Strength goal → 85%+ 1RM.
 - If athlete hit prescribed reps with RPE ≤ 8 across recent sessions for an exercise_id → MUST progress: +2.5% load OR +1 rep on the top of the rep range (state which in progression_note).
 - If RPE ≥ 9 or failed rep targets → deload ~5% load OR reduce target_rir to 3–4, sets −1.
 - If no logs in 3 weeks → use catalog defaults with target_rep_range "8-12 @ 2 RIR" and estimate load from body mass.
@@ -586,68 +659,32 @@ SMART SUBSTITUTION (alternative_exercise_id — mandatory when possible):
 - Must be in allowed_exercise_ids, not blocked by injuries, equipment-available.
 - Use null only if no valid alternative exists.
 
-STEP 3 DETAIL — COMBAT COACH (Blood & Bone — Elite Striking Coach):
+STEP 3 — COMBAT COACH (apply after Step 2 — cross-pillar logic is mandatory):
+- Primary mandate: fulfill the user's Combat goal above (e.g. Cardio conditioning → more rounds / shorter rest; Technical mastery → defense_counter + footwork_range emphasis).
+- Inspect Step 2 primary_muscle / movement_pattern load from iron_expert.routine_exercise_ids + catalog_dictionary.
+- IF Iron heavily taxed LEGS (squat/hinge/lunge patterns; quadriceps, hamstrings, glutes dominant): Combat MUST bias Boxing — upper body and head movement. Prescribe tactical_focus footwork_range and defense_counter; combo_id from catalog_by_tactical_focus for those lanes; coach_intent references hands, slips, rolls, angles, exits — minimize kicking volume.
+- IF Iron heavily taxed UPPER BODY (push/pull patterns; chest, back, shoulders, arms dominant): Combat MUST bias Muay Thai — kicks and knees. Prescribe tactical_focus power_inside; prefer combos with knees, teeps, low kicks, elbows in sequence; coach_intent references leg weapons and inside work.
+- IF balanced or moderate leg tax: blend footwork_range → power_inside arc per combat_expert.tactical_focus_catalog.
+- REQUIRED: full rounds_structure (2–4 segments) and full rounds[] — one entry per round_index, distinct combo_id when catalog allows.
+- combo_id ONLY from combat_expert.allowed_combo_ids; match catalog tactical_focus to round segment.
+- work_seconds: footwork_range/defense_counter 180; power_inside 180; burnout 120–150, rest 45–60.
+- High global fatigue or yesterday_main_rpe >= 8: reduce to 3 rounds, favor defense_counter, shorten burnout.
 
-COMBAT GOAL DIRECTIVE (from Biological Passport):
-- User declared goal: "${biological.goal_combat ?? 'not specified'}"
-- Cardio Conditioning → maximise aerobic volume: longer work intervals (180–240s), shorter rest (45–60s), burnout finisher mandatory, 4–5 rounds.
-- Technical Mastery → prioritise complexity: choose combos at or near max_complexity_for_user, emphasise defensive cues in coach_intent, prefer footwork_range + defense_counter segments.
-- Power Development → prioritise power_inside segments, heavy pad emphasis in coach_intent, 2–3 rounds, rest 90s.
-- Self-Defence → mix footwork_range + defense_counter + power_inside; always include at least one defense_counter segment; coach_intent must reference practical application.
-- Not specified → standard tactical arc at coach's discretion.
-
-- Cross-pillar rule from Head Coach: inspect the Iron block's exercises[] you built in STEP 2. Identify the primary muscle groups taxed (lower_body: quads/hamstrings/glutes/calves; upper_body: chest/back/shoulders/biceps/triceps). Then:
-  * Iron taxed lower body heavily → ENTIRE Combat sequence MUST be Boxing-dominant (jabs, crosses, hooks, uppercuts, slips, head movement, footwork). Avoid roundhouses, teeps, knees, low kicks.
-  * Iron taxed upper body heavily → ENTIRE Combat sequence MUST be Muay Thai-dominant (teeps, roundhouse kicks, knees, push kicks, leg kicks). Minimize punching volume on the arms.
-  * Mixed or no Iron session → standard tactical arc at coach's discretion.
-- You prescribe TACTICAL ROUNDS, not generic pad work. Use combat_expert.tactical_focus_catalog.
-- REQUIRED: combat.rounds_structure — narrative arc (2–4 segments). Example:
-  * Round 1 only: footwork_range (establish range, teeps, angles, exits)
-  * Rounds 2–3: power_inside (hooks, body shots, clinch entries, knees/elbows)
-  * Round 4: defense_counter OR burnout depending on yesterday_main_rpe / stress
-- Each rounds_structure entry: round_start, round_end (1-based inclusive), tactical_focus, coach_intent (1 sentence).
-- combat.rounds: one entry per round_index (0-based); each MUST include tactical_focus matching its segment in rounds_structure.
-- combo_id ONLY from combat_expert.allowed_combo_ids. Prefer combos whose catalog tactical_focus matches the round's tactical_focus (see catalog_by_tactical_focus).
-- Sequences include defensive cues (Slip Left/Right, Roll Right, Check Kick, Parry, Sprawl, High Guard) — honor them in coach_intent.
-- Match complexity to combat_mastery; never above max_complexity_for_user.
-- work_seconds: footwork_range/defense_counter 180; power_inside 180; burnout 120–150 with rest_seconds 45–60.
-- High stress or yesterday_main_rpe >= 8: shorten burnout, add defense_counter segment, reduce round count to 3.
-
-STEP 4 DETAIL — FLOW / SPIRIT COACH (Biomechanical Healer):
-
-FLOW GOAL DIRECTIVE (from Biological Passport):
-- User declared Flow goal: "${biological.goal_flow ?? 'not specified'}"
-- Mobility → select asanas with wide range-of-motion emphasis; longer hold_seconds (60–120s); favour hip/shoulder openers.
-- Recovery → short holds (30–60s); gentle dynamic flows; favour parasympathetic poses (child's pose, supine twist, legs-up-the-wall); breathwork tempo if RPE ≥ 8.
-- Flexibility → passive holds (90–150s); prioritise end-range positions; no dynamic flows.
-- Stress Relief → bias breathwork mode unless healer_48h demands flow; if flow, choose grounding poses (forward fold, seated twist); hold_seconds 60–90s.
-- Not specified → let healer_48h and RPE dictate mode and pose selection.
-
-SPIRIT GOAL DIRECTIVE (from Biological Passport):
-- User declared Spirit goal: "${biological.goal_spirit ?? 'not specified'}"
-- Breathwork → always use breathwork mode; choose tempo from allowed_tempo_ids that matches stress and RPE (high RPE → tempo_478 or box breathing).
-- Meditation → breathwork mode with the most neutral / steady tempo; duration ≥ 15 min; prescribed_reason must reference mental clarity.
-- Recovery → as with Flow Recovery: favour breathwork when stress high, flow when muscle fatigue is the primary driver.
-- Pre-Session Prime → shorter session (8–12 min); upregulating breath pattern if catalog supports it; else choose a primer flow with dynamic poses.
-- Not specified → defer to healer_48h + RPE heuristics.
-
-- Cross-pillar rule from Head Coach: inspect the muscle groups taxed in STEPS 2 AND 3. Select asanas that directly decompress those muscles. Examples:
-  * Heavy lower body Iron + Boxing Combat → prioritize hip flexors, quads, hamstrings, lumbar (e.g. pigeon, low lunge, supine twist, forward fold).
-  * Heavy upper body Iron + Muay Thai Combat → prioritize chest, shoulders, lats, hip flexors from kicks (e.g. doorframe stretch analog, thread the needle, low lunge).
-  * Document this reasoning in prescribed_reason.
-- Read spirit_expert.healer_48h — REQUIRED for Flow prescriptions (mode: "flow").
-- MANDATORY: If healer_48h.iron_lower_body_heavy is true, EVERY asana_id MUST come from flow entries whose target_recovery_zones includes "lower_back" OR "hips" (see flow_catalog_by_zone).
-- MANDATORY: If spirit_essence is low (spirit_expert.spirit_essence <= ${SPIRIT_BEGINNER_ESSENCE_MAX}), only prescribe asanas with complexity_tier 1 (spirit_expert.max_complexity_tier).
-- Flow block: mode "flow", asanas[] (4–7 items) with asana_id from spirit_expert.allowed_flow_ids only; hold_seconds per asana (use catalog default_hold_seconds; dynamic flows ~30s equivalent).
-- recovery_focus_zones MUST echo healer_48h.required_recovery_zones.
-- Breathwork block: mode "breathwork", tempo_id from allowed_tempo_ids when nervous-system downregulation is priority (high RPE / stress).
-- Use yesterday_main_rpe: RPE >= 8 favors longer flow (18–22 min) or breathwork tempo_478; RPE <= 4 shorter primer (10–14 min).
-- prescribed_reason must cite 48h load and the specific muscles taxed by Iron + Combat (e.g. "Hip & lumbar restore — heavy hinge + boxing volume in 48h").
+STEP 4 — FLOW / SPIRIT COACH (apply after Steps 2 and 3):
+- Primary mandate: fulfill the user's Flow and Spirit goals above (e.g. Mobility → longer holds on flow sequence; Nervous system recovery → breathwork tempo_id).
+- Decompress muscles targeted in Steps 2 AND 3 — not generic recovery.
+- Read spirit_expert.healer_48h and flow_catalog_by_zone in expert_context.
+- Flow mode: full sequence[] (4–7 asana_id entries, ordered) mirroring the same items in asanas[]; hold_seconds from catalog default_hold_seconds.
+- If Step 2 taxed lower body OR Step 3 was Boxing-biased with high combat volume: sequence MUST target lower_back, hips, glutes recovery zones.
+- If Step 2 taxed upper body OR Step 3 was kick-heavy: add thoracic_spine, shoulders, neck zones as needed.
+- spirit_essence <= ${SPIRIT_BEGINNER_ESSENCE_MAX}: complexity_tier 1 asanas only.
+- Breathwork mode when global fatigue is high and nervous-system downregulation is priority: tempo_id from allowed_tempo_ids, cite load in prescribed_reason.
+- prescribed_reason must cite Iron + Combat load from Steps 2–3 (e.g. "Hip & lumbar restore — heavy hinge + boxing volume in 48h").
 
 DAY STRUCTURE:
 - 2–4 blocks, order starting at 0.
 - Balance pillars using focus_preference weights (highest weight = main ritual block).
-- Include at most one iron block, one combat block; spirit/flow blocks use pillar "spirit".`;
+- At most one iron block, one combat block; spirit blocks use pillar "spirit".`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1059,6 +1096,13 @@ function pickExecutionTechnique(
   return 'Standard';
 }
 
+function resolveIronGoalLabel(goalIron: string | null): string {
+  const normalized = (goalIron ?? '').toLowerCase();
+  if (normalized.includes('strength')) return 'Strength (85%+ 1RM)';
+  if (normalized.includes('hypertrophy')) return 'Hypertrophy (70–80% 1RM)';
+  return 'Progressive';
+}
+
 function prescribeIronExercise(
   exerciseId: string,
   catalog: LibraryExercise[],
@@ -1068,6 +1112,7 @@ function prescribeIronExercise(
   ironLogs3w: PerformanceLogRow[],
   weeklyVolume: WeeklyMuscleVolumeRow[],
   equipment: string[],
+  goalIron: string | null,
 ): IronExercisePrescription {
   const meta = catalog.find((row) => row.id === exerciseId);
   const last = ironLogs3w.find((log) => log.exercise_id === exerciseId);
@@ -1079,6 +1124,15 @@ function prescribeIronExercise(
   let targetReps = meta?.default_reps ?? 10;
   let targetWeight: number | null = last?.weight_used ?? null;
   let note = mesocycle?.notes ?? 'Baseline prescription';
+
+  const e1rm = estimateBestE1RMFromLogs(ironLogs3w, exerciseId);
+  if (e1rm != null) {
+    const e1rmTarget = targetWeightFromE1RM(e1rm, goalIron, targetReps, targetRir);
+    if (e1rmTarget != null) {
+      targetWeight = e1rmTarget;
+      note = `E1RM ${e1rm} kg (Epley, 21d) · ${resolveIronGoalLabel(goalIron)} load`;
+    }
+  }
 
   if (targetWeight == null && baselineWeightKg != null) {
     targetWeight = Math.round(baselineWeightKg * 0.35 * 10) / 10;
@@ -1328,6 +1382,7 @@ function buildDeterministicIronBlock(
   baselineWeightKg: number | null,
   autoreg: IronAutoregulationState,
   equipment: string[],
+  goalIron: string | null,
 ): GameplanBlockPayload {
   const mesocycle = buildMesocycleSummaries(routineIds, catalog, ironLogs3w);
   const mesocycleById = new Map(mesocycle.map((row) => [row.exercise_id, row]));
@@ -1343,6 +1398,7 @@ function buildDeterministicIronBlock(
       ironLogs3w,
       weeklyVolume,
       equipment,
+      goalIron,
     ),
   );
 
@@ -2016,9 +2072,10 @@ function sanitizeBlueprint(
     if (block.pillar === 'spirit' && block.spirit) {
       const spiritMode = block.spirit.mode === 'flow' ? 'flow' : 'breathwork';
 
-      if (spiritMode === 'flow' && Array.isArray(block.spirit.asanas)) {
+      const flowSequenceRaw = block.spirit.sequence ?? block.spirit.asanas;
+      if (spiritMode === 'flow' && Array.isArray(flowSequenceRaw)) {
         const flowSet = new Set(allowedFlowIds);
-        const asanas = block.spirit.asanas
+        const asanas = flowSequenceRaw
           .filter((row) => flowSet.has(row.asana_id))
           .map((row, index) => {
             const catalogRow = flowCatalog.find((item) => item.id === row.asana_id);
@@ -2055,6 +2112,7 @@ function sanitizeBlueprint(
               block.spirit.recovery_focus_zones.length > 0
                 ? block.spirit.recovery_focus_zones.map(String)
                 : healer.required_recovery_zones,
+            sequence: asanas,
             asanas,
           };
           sanitized.subtitle = `${asanas[0]!.name} · ${asanas.length} asanas`;
@@ -2083,7 +2141,8 @@ function sanitizeBlueprint(
       (sanitized.pillar === 'combat' && (sanitized.combat?.rounds?.length ?? 0) > 0) ||
       (sanitized.pillar === 'spirit' &&
         (Boolean(sanitized.spirit?.tempo_id) ||
-          (sanitized.spirit?.asanas?.length ?? 0) > 0));
+          (sanitized.spirit?.asanas?.length ?? 0) > 0 ||
+          (sanitized.spirit?.sequence?.length ?? 0) > 0));
 
     return hasPayload ? [sanitized] : [];
   });
@@ -2092,6 +2151,8 @@ function sanitizeBlueprint(
 function buildExpertContext(
   focus: FocusPreference,
   equipment: string[],
+  pillarGoals: PillarGoals,
+  trainingDaysPerWeek: number,
   catalog: LibraryExercise[],
   routineIds: string[],
   comboCatalog: LibraryCombo[],
@@ -2129,6 +2190,12 @@ function buildExpertContext(
   return {
     focus_preference: focus,
     available_equipment: equipment,
+    pillar_goals: pillarGoals,
+    microcycle_planning: {
+      training_days_per_week: trainingDaysPerWeek,
+      calendar_days: 7,
+      day_index_legend: '1=Monday through 7=Sunday',
+    },
     iron_expert: {
       routine_id: 'iron_routine_a',
       routine_exercise_ids: routineIds,
@@ -2224,6 +2291,329 @@ function buildExpertContext(
   };
 }
 
+function blocksForDayIndex(
+  microcycle: MicrocycleDayPayload[],
+  protocolDate: string,
+  weekStartDate: string,
+): GameplanBlockPayload[] {
+  const dayIndex = getDayIndexForDate(protocolDate, weekStartDate);
+  return microcycle.find((day) => day.day_index === dayIndex)?.blocks ?? [];
+}
+
+function countActiveTrainingDays(microcycle: MicrocycleDayPayload[]): number {
+  return microcycle.filter((day) => !day.is_rest_day).length;
+}
+
+function isDegenerateMicrocyclePayload(
+  microcycle: MicrocycleDayPayload[],
+  trainingDaysPerWeek: number,
+): boolean {
+  const active = countActiveTrainingDays(microcycle);
+  const expected = clampTrainingDaysPerWeek(trainingDaysPerWeek);
+  return active === 0 || active < expected;
+}
+
+function normalizeMicrocyclePayload(
+  days: MicrocycleDayPayload[],
+  trainingDaysPerWeek: number,
+): MicrocycleDayPayload[] {
+  const trainingIndices = spreadTrainingDayIndices(trainingDaysPerWeek);
+  const trainingSet = new Set(trainingIndices);
+  const byIndex = new Map(
+    days
+      .filter((day) => day.day_index >= 1 && day.day_index <= 7)
+      .map((day) => [day.day_index, day]),
+  );
+
+  let trainingSlot = 0;
+  return Array.from({ length: 7 }, (_, index) => {
+    const day_index = index + 1;
+    const existing = byIndex.get(day_index);
+    const shouldTrain = trainingSet.has(day_index);
+
+    if (existing) {
+      if (shouldTrain && existing.is_rest_day) {
+        return {
+          ...existing,
+          is_rest_day: false,
+          focus_label:
+            existing.focus_label === 'Rest & Recovery'
+              ? focusLabelForTrainingSlot(trainingDaysPerWeek, trainingSlot++)
+              : existing.focus_label,
+        };
+      }
+      if (!shouldTrain) {
+        return {
+          day_index,
+          is_rest_day: true,
+          focus_label: 'Rest & Recovery',
+          blocks: [],
+        };
+      }
+      if (!existing.is_rest_day) trainingSlot += 1;
+      return existing;
+    }
+
+    if (shouldTrain) {
+      return {
+        day_index,
+        is_rest_day: false,
+        focus_label: focusLabelForTrainingSlot(trainingDaysPerWeek, trainingSlot++),
+        blocks: [],
+      };
+    }
+
+    return {
+      day_index,
+      is_rest_day: true,
+      focus_label: 'Rest & Recovery',
+      blocks: [],
+    };
+  });
+}
+
+function buildBlocksForFocusLabel(
+  focusLabel: string,
+  focus: FocusPreference,
+  catalog: LibraryExercise[],
+  routineIds: string[],
+  ironLogs3w: PerformanceLogRow[],
+  ironLogs7d: PerformanceLogRow[],
+  autoreg: IronAutoregulationState,
+  equipment: string[],
+  comboCatalog: LibraryCombo[],
+  allowedComboIds: string[],
+  combatMastery: number,
+  yesterdayRpe: number | null,
+  biological: BiologicalPassport,
+  flowCatalog: LibraryFlowSpiritRow[],
+  allowedFlowIds: string[],
+  healer: HealerRecoveryState,
+  dayIndex: number,
+  goalIron: string | null,
+): GameplanBlockPayload[] {
+  const lower = focusLabel.toLowerCase();
+  const blocks: GameplanBlockPayload[] = [];
+  let order = 0;
+  const stressRpe =
+    yesterdayRpe ??
+    (biological.baseline_stress_level != null ? biological.baseline_stress_level + 2 : null);
+
+  const wantsIron =
+    lower.includes('iron') ||
+    lower.includes('push') ||
+    lower.includes('pull') ||
+    lower.includes('leg') ||
+    lower.includes('upper') ||
+    lower.includes('lower') ||
+    lower.includes('full body');
+
+  const wantsCombat = lower.includes('combat') || lower.includes('footwork');
+  const wantsSpirit =
+    lower.includes('spirit') ||
+    lower.includes('flow') ||
+    lower.includes('recovery') ||
+    lower.includes('breath');
+
+  if (wantsIron && routineIds.length > 0) {
+    const iron = buildDeterministicIronBlock(
+      `iron_routine_d${dayIndex}`,
+      catalog,
+      routineIds,
+      ironLogs3w,
+      ironLogs7d,
+      biological.weight_kg,
+      autoreg,
+      equipment,
+      goalIron,
+    );
+    iron.id = `block-d${dayIndex}-iron`;
+    iron.title = focusLabel;
+    iron.order = order++;
+    blocks.push(iron);
+  }
+
+  if (wantsCombat) {
+    const combat = buildDeterministicCombatBlock(
+      comboCatalog.filter((combo) => allowedComboIds.includes(combo.id)),
+      combatMastery,
+      yesterdayRpe,
+      biological.baseline_stress_level,
+    );
+    if (combat) {
+      combat.id = `block-d${dayIndex}-combat`;
+      combat.title = focusLabel;
+      combat.order = order++;
+      blocks.push(combat);
+    }
+  }
+
+  if (wantsSpirit) {
+    const spirit =
+      buildFlowBlockFromHealer(
+        flowCatalog,
+        allowedFlowIds,
+        healer,
+        stressRpe,
+        order,
+        `block-d${dayIndex}-spirit`,
+        focusLabel,
+      ) ?? buildSpiritBlockFromRpe(stressRpe, order, `block-d${dayIndex}-spirit`, focusLabel);
+    spirit.order = order++;
+    blocks.push(spirit);
+  }
+
+  if (blocks.length > 0) return blocks;
+
+  return buildFallbackProtocol(
+    focus,
+    catalog,
+    routineIds,
+    ironLogs3w,
+    ironLogs7d,
+    autoreg,
+    equipment,
+    comboCatalog,
+    allowedComboIds,
+    combatMastery,
+    yesterdayRpe,
+    biological,
+    flowCatalog,
+    allowedFlowIds,
+    healer,
+    goalIron,
+  );
+}
+
+function buildDeterministicMicrocycle(
+  trainingDaysPerWeek: number,
+  focus: FocusPreference,
+  catalog: LibraryExercise[],
+  routineIds: string[],
+  ironLogs3w: PerformanceLogRow[],
+  ironLogs7d: PerformanceLogRow[],
+  autoreg: IronAutoregulationState,
+  equipment: string[],
+  comboCatalog: LibraryCombo[],
+  allowedComboIds: string[],
+  combatMastery: number,
+  yesterdayRpe: number | null,
+  biological: BiologicalPassport,
+  flowCatalog: LibraryFlowSpiritRow[],
+  allowedFlowIds: string[],
+  healer: HealerRecoveryState,
+  goalIron: string | null,
+): MicrocycleDayPayload[] {
+  const trainingIndices = spreadTrainingDayIndices(trainingDaysPerWeek);
+  const trainingSet = new Set(trainingIndices);
+  let trainingSlot = 0;
+
+  return Array.from({ length: 7 }, (_, index) => {
+    const day_index = index + 1;
+    if (!trainingSet.has(day_index)) {
+      return {
+        day_index,
+        is_rest_day: true,
+        focus_label: 'Rest & Recovery',
+        blocks: [],
+      };
+    }
+
+    const focus_label = focusLabelForTrainingSlot(trainingDaysPerWeek, trainingSlot++);
+    const blocks = buildBlocksForFocusLabel(
+      focus_label,
+      focus,
+      catalog,
+      routineIds,
+      ironLogs3w,
+      ironLogs7d,
+      autoreg,
+      equipment,
+      comboCatalog,
+      allowedComboIds,
+      combatMastery,
+      yesterdayRpe,
+      biological,
+      flowCatalog,
+      allowedFlowIds,
+      healer,
+      day_index,
+      goalIron,
+    );
+
+    return {
+      day_index,
+      is_rest_day: false,
+      focus_label,
+      blocks,
+    };
+  });
+}
+
+function sanitizeMicrocycle(
+  raw: AiBlueprintResponse,
+  trainingDaysPerWeek: number,
+  routineExerciseIds: string[],
+  allowedComboIds: string[],
+  allowedTempoIds: string[],
+  allowedFlowIds: string[],
+  catalog: LibraryExercise[],
+  comboCatalog: LibraryCombo[],
+  flowCatalog: LibraryFlowSpiritRow[],
+  healer: HealerRecoveryState,
+  equipment: string[],
+  autoreg: IronAutoregulationState,
+  weeklyVolume: WeeklyMuscleVolumeRow[],
+): MicrocycleDayPayload[] {
+  if (!raw.microcycle?.length) return [];
+
+  const sanitizedDays = raw.microcycle.flatMap((day): MicrocycleDayPayload[] => {
+    const day_index =
+      typeof day.day_index === 'number'
+        ? Math.min(7, Math.max(1, Math.round(day.day_index)))
+        : null;
+    if (day_index == null) return [];
+
+    const is_rest_day = day.is_rest_day === true;
+    const focus_label =
+      typeof day.focus_label === 'string' && day.focus_label.trim()
+        ? day.focus_label.trim()
+        : is_rest_day
+          ? 'Rest & Recovery'
+          : 'Training Day';
+
+    if (is_rest_day) {
+      return [{ day_index, is_rest_day: true, focus_label, blocks: [] }];
+    }
+
+    const blocks = sanitizeBlueprint(
+      { blocks: day.blocks ?? [] },
+      routineExerciseIds,
+      allowedComboIds,
+      allowedTempoIds,
+      allowedFlowIds,
+      catalog,
+      comboCatalog,
+      flowCatalog,
+      healer,
+      equipment,
+      autoreg,
+      weeklyVolume,
+    );
+
+    return [
+      {
+        day_index,
+        is_rest_day: false,
+        focus_label,
+        blocks,
+      },
+    ];
+  });
+
+  return normalizeMicrocyclePayload(sanitizedDays, trainingDaysPerWeek);
+}
+
 function buildFallbackProtocol(
   focus: FocusPreference,
   catalog: LibraryExercise[],
@@ -2240,6 +2630,7 @@ function buildFallbackProtocol(
   flowCatalog: LibraryFlowSpiritRow[],
   allowedFlowIds: string[],
   healer: HealerRecoveryState,
+  goalIron: string | null,
 ): GameplanBlockPayload[] {
   const ranked = [
     { pillar: 'iron' as const, weight: focus.iron },
@@ -2279,6 +2670,7 @@ function buildFallbackProtocol(
       biological.weight_kg,
       autoreg,
       equipment,
+      goalIron,
     );
     iron.order = order++;
     blocks.push(iron);
@@ -2316,9 +2708,9 @@ function buildFallbackProtocol(
 // Handler
 // ---------------------------------------------------------------------------
 
-Deno.serve(async (req) => {
+export async function handleHeadCoachRequest(req: Request): Promise<Response> {
   if (req.method === 'OPTIONS') {
-    return corsResponse(null, 204);
+    return new Response('ok', { headers: corsHeaders });
   }
 
   try {
@@ -2361,6 +2753,14 @@ Deno.serve(async (req) => {
     const flowCatalog = catalogAssets.flow_spirit;
     const allowedSpiritTempoIds = catalogAssets.spirit_tempo_ids;
     const availableAssetsTag = buildAvailableAssetsTag(catalogAssets);
+    console.log('[generate_daily_protocol] <AVAILABLE_ASSETS> injected', {
+      tag_char_length: availableAssetsTag.length,
+      exercises: exerciseCatalog.length,
+      combat: comboCatalog.length,
+      flow: flowCatalog.filter((row) => row.pillar === 'flow').length,
+      spirit: flowCatalog.filter((row) => row.pillar === 'spirit').length,
+      equipment: available_equipment,
+    });
 
     if (catalogAssets.fetch_errors.length > 0) {
       console.warn(
@@ -2411,7 +2811,7 @@ Deno.serve(async (req) => {
       supabase
         .from('profiles')
         .select(
-          'focus_preference, date_of_birth, weight_kg, height_cm, body_fat_percentage, current_injuries, baseline_stress_level, goal_iron, goal_combat, goal_flow, goal_spirit',
+          'focus_preference, date_of_birth, weight_kg, height_cm, body_fat_percentage, current_injuries, baseline_stress_level, training_days_per_week, goal_iron, goal_combat, goal_flow, goal_spirit',
         )
         .eq('id', user.id)
         .maybeSingle(),
@@ -2436,7 +2836,18 @@ Deno.serve(async (req) => {
         .maybeSingle(),
     ]);
 
-    const biological = mapBiologicalPassport((profileRes.data as ProfileRow | null) ?? null);
+    const profileRow = (profileRes.data as ProfileRow | null) ?? null;
+    const biological = mapBiologicalPassport(profileRow);
+    const pillarGoals = mapPillarGoals(profileRow);
+    const trainingDaysPerWeek = clampTrainingDaysPerWeek(profileRow?.training_days_per_week);
+    const weekStartDate = getWeekStartMonday(protocolDate);
+    console.log('[generate_daily_protocol] Profile + planning', {
+      training_days_per_week: trainingDaysPerWeek,
+      profile_training_raw: profileRow?.training_days_per_week,
+      protocolDate,
+      weekStartDate,
+      focus_preference,
+    });
 
     const combatMastery = statsRes.data?.combat_mastery ?? 0;
     const spiritEssence = statsRes.data?.spirit_essence ?? 0;
@@ -2512,7 +2923,8 @@ Deno.serve(async (req) => {
         ? allowedFlowIds
         : flowCatalog.filter((row) => row.pillar === 'flow').map((row) => row.id);
 
-    let blocks: GameplanBlockPayload[] = buildFallbackProtocol(
+    let microcycle: MicrocycleDayPayload[] = buildDeterministicMicrocycle(
+      trainingDaysPerWeek,
       focus_preference,
       exerciseCatalog,
       autoregulatedRoutineIds,
@@ -2528,6 +2940,13 @@ Deno.serve(async (req) => {
       flowCatalog,
       resolvedFlowIds,
       healerState,
+      pillarGoals.goal_iron,
+    );
+
+    let blocks: GameplanBlockPayload[] = blocksForDayIndex(
+      microcycle,
+      protocolDate,
+      weekStartDate,
     );
 
     let source: 'ai' | 'fallback' | 'deterministic' = 'deterministic';
@@ -2536,6 +2955,8 @@ Deno.serve(async (req) => {
       const expertContext = buildExpertContext(
         focus_preference,
         available_equipment,
+        pillarGoals,
+        trainingDaysPerWeek,
         exerciseCatalog,
         autoregulatedRoutineIds,
         comboCatalog,
@@ -2568,12 +2989,24 @@ Deno.serve(async (req) => {
           temperature: 0.2,
           response_format: { type: 'json_object' },
           messages: [
-            { role: 'system', content: buildSystemPrompt(biological, availableAssetsTag) },
+            {
+              role: 'system',
+              content: buildSystemPrompt(
+                biological,
+                pillarGoals,
+                trainingDaysPerWeek,
+                availableAssetsTag,
+              ),
+            },
             {
               role: 'user',
               content: JSON.stringify({
                 date: protocolDate,
+                week_start_date: weekStartDate,
+                training_days_per_week: trainingDaysPerWeek,
                 biological_passport: biological,
+                pillar_goals: pillarGoals,
+                performance_logs: performanceLogs,
                 expert_context: expertContext,
                 catalog_counts: {
                   exercises: exerciseCatalog.length,
@@ -2581,23 +3014,82 @@ Deno.serve(async (req) => {
                   flow: flowCatalog.filter((r) => r.pillar === 'flow').length,
                   spirit: flowCatalog.filter((r) => r.pillar === 'spirit').length,
                 },
+                instruction:
+                  'Plan a 7-day microcycle with exactly 7 day_index entries. Honor training_days_per_week rest/training split. Return complete exercises[], rounds[], and sequence[] on each training day.',
               }),
             },
           ],
         }),
       });
 
+      console.log('[generate_daily_protocol] OpenRouter response', {
+        ok: llmRes.ok,
+        status: llmRes.status,
+        statusText: llmRes.statusText,
+      });
+
       if (llmRes.ok) {
         const llmJson = await llmRes.json();
         const content = llmJson?.choices?.[0]?.message?.content;
+        console.log('[generate_daily_protocol] OpenRouter content', {
+          content_type: typeof content,
+          content_length: typeof content === 'string' ? content.length : 0,
+        });
         if (typeof content === 'string') {
           try {
             const parsed = JSON.parse(content) as AiBlueprintResponse;
+            console.log('[generate_daily_protocol] LLM JSON parsed', {
+              has_microcycle: Boolean(parsed.microcycle?.length),
+              microcycle_len: parsed.microcycle?.length ?? 0,
+              has_blocks: Array.isArray(parsed.blocks) ? parsed.blocks.length : 0,
+              llm_error: parsed.error,
+            });
             if (parsed.error === 'INSUFFICIENT_CATALOG') {
               console.warn(
                 '[generate_daily_protocol] LLM returned INSUFFICIENT_CATALOG:',
                 parsed.message,
               );
+            } else if (parsed.microcycle?.length) {
+              const sanitizedMicrocycle = sanitizeMicrocycle(
+                parsed,
+                trainingDaysPerWeek,
+                autoregulatedRoutineIds,
+                allowedComboIds.length > 0 ? allowedComboIds : comboCatalog.map((combo) => combo.id),
+                allowedSpiritTempoIds,
+                resolvedFlowIds,
+                exerciseCatalog,
+                comboCatalog,
+                flowCatalog,
+                healerState,
+                available_equipment,
+                ironAutoreg,
+                weeklyVolume,
+              );
+              console.log('[generate_daily_protocol] sanitizeMicrocycle result', {
+                length: sanitizedMicrocycle.length,
+                active_training_days: countActiveTrainingDays(sanitizedMicrocycle),
+                expected_training_days: trainingDaysPerWeek,
+              });
+              if (sanitizedMicrocycle.length === 7) {
+                if (!isDegenerateMicrocyclePayload(sanitizedMicrocycle, trainingDaysPerWeek)) {
+                  microcycle = sanitizedMicrocycle;
+                  blocks = blocksForDayIndex(microcycle, protocolDate, weekStartDate);
+                  source = 'ai';
+                } else {
+                  console.error(
+                    '[generate_daily_protocol] Rejected sanitized LLM microcycle — degenerate week',
+                    {
+                      active: countActiveTrainingDays(sanitizedMicrocycle),
+                      expected: trainingDaysPerWeek,
+                    },
+                  );
+                }
+              } else {
+                console.warn(
+                  '[generate_daily_protocol] sanitizeMicrocycle length !== 7 — keeping deterministic',
+                  { length: sanitizedMicrocycle.length },
+                );
+              }
             } else if (Array.isArray(parsed.blocks) && parsed.blocks.length > 0) {
               const sanitized = sanitizeBlueprint(
                 parsed,
@@ -2614,24 +3106,85 @@ Deno.serve(async (req) => {
                 weeklyVolume,
               );
               if (sanitized.length > 0) {
+                const todayIndex = getDayIndexForDate(protocolDate, weekStartDate);
+                microcycle = normalizeMicrocyclePayload(
+                  [
+                    {
+                      day_index: todayIndex,
+                      is_rest_day: false,
+                      focus_label: 'AI Daily Protocol',
+                      blocks: sanitized,
+                    },
+                  ],
+                  trainingDaysPerWeek,
+                );
                 blocks = sanitized;
                 source = 'ai';
               }
             }
-          } catch {
-            // Keep deterministic fallback
+          } catch (parseError) {
+            console.error(
+              '[generate_daily_protocol] LLM JSON parse failed — keeping deterministic',
+              parseError instanceof Error ? parseError.message : parseError,
+            );
           }
+        } else {
+          console.warn('[generate_daily_protocol] OpenRouter returned non-string content');
         }
+      } else {
+        const errorBody = await llmRes.text();
+        console.error('[generate_daily_protocol] OpenRouter HTTP error body', {
+          status: llmRes.status,
+          body_preview: errorBody.slice(0, 500),
+        });
       }
     } else if (!openRouterKey) {
+      console.warn('[generate_daily_protocol] OPENROUTER_API_KEY missing — deterministic only');
       source = 'fallback';
     }
+
+    console.log('[generate_daily_protocol] Final microcycle before upsert', {
+      source,
+      active_training_days: countActiveTrainingDays(microcycle),
+      expected_training_days: trainingDaysPerWeek,
+      days: microcycle.map((day) => ({
+        day_index: day.day_index,
+        is_rest_day: day.is_rest_day,
+        blocks: day.blocks.length,
+      })),
+    });
+
+    if (isDegenerateMicrocyclePayload(microcycle, trainingDaysPerWeek)) {
+      console.error('[generate_daily_protocol] Refusing degenerate microcycle upsert');
+      return jsonResponse(
+        {
+          error: 'DEGENERATE_MICROCYCLE',
+          message: `Generated week has ${countActiveTrainingDays(microcycle)} training days but profile expects ${trainingDaysPerWeek}. Check catalog seeds and OPENROUTER_API_KEY.`,
+          training_days_per_week: trainingDaysPerWeek,
+          catalog_counts: {
+            exercises: exerciseCatalog.length,
+            combat: comboCatalog.length,
+            flow: flowCatalog.length,
+          },
+          source,
+        },
+        422,
+      );
+    }
+
+    const blocksWithStatus = blocks.map((block) => ({ ...block, status: 'pending' as const }));
+    const microcycleWithStatus = microcycle.map((day) => ({
+      ...day,
+      blocks: day.blocks.map((block) => ({ ...block, status: 'pending' as const })),
+    }));
 
     await supabase.from('daily_protocols').upsert(
       {
         user_id: user.id,
         protocol_date: protocolDate,
-        blocks,
+        blocks: blocksWithStatus,
+        microcycle: microcycleWithStatus,
+        week_start_date: weekStartDate,
         source,
         generated_at: new Date().toISOString(),
       },
@@ -2640,12 +3193,28 @@ Deno.serve(async (req) => {
 
     return jsonResponse({
       date: protocolDate,
-      blocks: blocks.map((block) => ({ ...block, status: 'pending' })),
+      week_start_date: weekStartDate,
+      training_days_per_week: trainingDaysPerWeek,
+      microcycle: microcycleWithStatus,
+      blocks: blocksWithStatus,
       generated_at: new Date().toISOString(),
       source,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    return jsonResponse({ error: message, blocks: FALLBACK_BLOCKS }, 500);
+    const weekStartDate = getWeekStartMonday(new Date().toISOString().slice(0, 10));
+    console.error('[generate_daily_protocol] Unhandled generation error:', message);
+    return jsonResponse(
+      {
+        error: 'GENERATION_FAILED',
+        message,
+        week_start_date: weekStartDate,
+      },
+      500,
+    );
   }
-});
+}
+
+if (import.meta.main) {
+  Deno.serve(handleHeadCoachRequest);
+}

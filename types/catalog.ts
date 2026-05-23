@@ -1,7 +1,39 @@
 /**
- * Iron / hypertrophy encyclopedia types — maps to `library_exercises`
- * (migration 008_iron_biomechanics.sql)
+ * SOMMA Encyclopedia catalog types — `library_exercises`, `library_combat`, `library_flow_spirit`
+ * Visual assets: CDN / Supabase Storage loops (MP4 · WebP · GIF)
  */
+
+import type { CombatTacticalFocus } from '@/types/gameplan';
+
+/** Movement demo renderer — maps to `visual_asset_type` column */
+export type VisualAssetType = 'mp4' | 'webm' | 'gif' | 'webp';
+
+/** Legacy DB values — not rendered by ModularMovementPlayer */
+export type LegacyVisualAssetType = 'lottie' | 'svg';
+
+/** Shared visual fields on all library catalog rows */
+export interface LibraryVisualAsset {
+  /** Public CDN or Supabase Storage URL for a short movement loop */
+  visual_asset_url: string | null;
+  visual_asset_type: VisualAssetType | null;
+}
+
+const MODULAR_VISUAL_TYPES = new Set<string>(['mp4', 'webm', 'gif', 'webp']);
+
+export function parseLibraryVisualAsset(row: Record<string, unknown>): LibraryVisualAsset {
+  const visual_asset_url =
+    typeof row.visual_asset_url === 'string' && row.visual_asset_url.trim()
+      ? row.visual_asset_url.trim()
+      : null;
+
+  const typeRaw = row.visual_asset_type;
+  const visual_asset_type: VisualAssetType | null =
+    typeof typeRaw === 'string' && MODULAR_VISUAL_TYPES.has(typeRaw)
+      ? (typeRaw as VisualAssetType)
+      : null;
+
+  return { visual_asset_url, visual_asset_type };
+}
 
 /** Known joint stress tags — DB allows any text; extend as catalog grows */
 export type JointStressProfile =
@@ -38,7 +70,7 @@ export interface IronExerciseBiomechanics {
   stretch_mediated_hypertrophy: boolean;
 }
 
-export interface LibraryExerciseBase {
+export interface LibraryExerciseBase extends LibraryVisualAsset {
   id: string;
   slug: string;
   name: string;
@@ -50,6 +82,32 @@ export interface LibraryExerciseBase {
 }
 
 export type LibraryExercise = LibraryExerciseBase & IronExerciseBiomechanics;
+
+/** Blood & Bone combo — maps to `library_combat` */
+export interface LibraryCombatCombo extends LibraryVisualAsset {
+  id: string;
+  slug: string;
+  combo_name: string;
+  sequence: string[];
+  complexity_level: number;
+  tactical_focus: CombatTacticalFocus;
+}
+
+/** Flow / Spirit session — maps to `library_flow_spirit` */
+export interface LibraryFlowSpiritSession extends LibraryVisualAsset {
+  id: string;
+  slug: string;
+  pillar: 'flow' | 'spirit';
+  session_name: string;
+  description: string | null;
+  duration_minutes: number;
+  tempo_profile: Record<string, unknown>;
+  complexity_level: number;
+  target_recovery_zones: string[];
+  complexity_tier: number;
+  is_dynamic_flow: boolean;
+  default_hold_seconds: number;
+}
 
 export function formatCnsFatigueCost(cost: number | null): string {
   if (cost == null) return '—';

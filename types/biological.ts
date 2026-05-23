@@ -1,4 +1,4 @@
-/** Biological Passport — maps to `profiles` anthropometric columns */
+/** Biological Passport — maps to `profiles` anthropometric + pillar goal columns */
 export interface BiologicalProfile {
   date_of_birth: string | null;
   weight_kg: number | null;
@@ -6,36 +6,48 @@ export interface BiologicalProfile {
   body_fat_percentage: number | null;
   current_injuries: string | null;
   baseline_stress_level: number | null;
-  /** Per-pillar training goals — injected into each AI coach's CoT step */
-  goal_iron: IronGoal | null;
-  goal_combat: CombatGoal | null;
-  goal_flow: FlowGoal | null;
-  goal_spirit: SpiritGoal | null;
+  goal_iron: string | null;
+  goal_combat: string | null;
+  goal_flow: string | null;
+  goal_spirit: string | null;
+  /** Weekly availability for microcycle planning (1–7) */
+  training_days_per_week: number | null;
 }
 
-export type IronGoal = 'Hypertrophy' | 'Strength' | 'Endurance' | 'Recomposition';
-export type CombatGoal =
-  | 'Cardio Conditioning'
-  | 'Technical Mastery'
-  | 'Power Development'
-  | 'Self-Defence';
-export type FlowGoal = 'Mobility' | 'Recovery' | 'Flexibility' | 'Stress Relief';
-export type SpiritGoal = 'Breathwork' | 'Meditation' | 'Recovery' | 'Pre-Session Prime';
+export const TRAINING_DAYS_MIN = 1;
+export const TRAINING_DAYS_MAX = 7;
+export const DEFAULT_TRAINING_DAYS_PER_WEEK = 4;
 
-export const IRON_GOALS: IronGoal[] = ['Hypertrophy', 'Strength', 'Endurance', 'Recomposition'];
-export const COMBAT_GOALS: CombatGoal[] = [
-  'Cardio Conditioning',
-  'Technical Mastery',
-  'Power Development',
-  'Self-Defence',
-];
-export const FLOW_GOALS: FlowGoal[] = ['Mobility', 'Recovery', 'Flexibility', 'Stress Relief'];
-export const SPIRIT_GOALS: SpiritGoal[] = [
-  'Breathwork',
-  'Meditation',
-  'Recovery',
-  'Pre-Session Prime',
-];
+export const PILLAR_GOAL_PRESETS = {
+  iron: [
+    'Hypertrophy',
+    'Strength',
+    'Powerbuilding',
+    'Maintenance',
+    'Rehab / joint-safe',
+  ],
+  combat: [
+    'Cardio conditioning',
+    'Technical mastery',
+    'Fight prep',
+    'Footwork & defense',
+    'Stress relief',
+  ],
+  flow: [
+    'Mobility',
+    'Active recovery',
+    'Flexibility',
+    'Pre-workout primer',
+  ],
+  spirit: [
+    'Nervous system recovery',
+    'Sleep prep',
+    'Breath mastery',
+    'Mindfulness',
+  ],
+} as const;
+
+export type PillarGoalKey = keyof typeof PILLAR_GOAL_PRESETS;
 
 export const initialBiologicalProfile: BiologicalProfile = {
   date_of_birth: null,
@@ -48,7 +60,17 @@ export const initialBiologicalProfile: BiologicalProfile = {
   goal_combat: null,
   goal_flow: null,
   goal_spirit: null,
+  training_days_per_week: DEFAULT_TRAINING_DAYS_PER_WEEK,
 };
+
+export function clampTrainingDaysPerWeek(value: number): number {
+  return Math.min(TRAINING_DAYS_MAX, Math.max(TRAINING_DAYS_MIN, Math.round(value)));
+}
+
+export function formatTrainingDaysPerWeek(days: number | null): string {
+  if (days == null) return '—';
+  return days === 1 ? '1 day / week' : `${days} days / week`;
+}
 
 export function isBiologicalProfileComplete(profile: BiologicalProfile): boolean {
   return (
@@ -59,7 +81,10 @@ export function isBiologicalProfileComplete(profile: BiologicalProfile): boolean
     profile.height_cm > 0 &&
     profile.baseline_stress_level != null &&
     profile.baseline_stress_level >= 1 &&
-    profile.baseline_stress_level <= 10
+    profile.baseline_stress_level <= 10 &&
+    profile.training_days_per_week != null &&
+    profile.training_days_per_week >= TRAINING_DAYS_MIN &&
+    profile.training_days_per_week <= TRAINING_DAYS_MAX
   );
 }
 

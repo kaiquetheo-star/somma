@@ -19,6 +19,10 @@ export default function WorkoutLayout() {
         name="ascension"
         options={{ gestureEnabled: false, animation: 'fade' }}
       />
+      <Stack.Screen
+        name="summary"
+        options={{ gestureEnabled: false, animation: 'fade' }}
+      />
     </Stack>
   );
 }

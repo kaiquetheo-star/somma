@@ -4,22 +4,41 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 
 import { isSupabaseConfigured } from '@/lib/config';
 import { fetchDailyGameplan } from '@/lib/gameplan/fetchDailyGameplan';
-import { generateStubGameplan, isGameplanStale } from '@/lib/gameplan/generateStubGameplan';
-import { syncPerformanceQueueAndRecalibrate } from '@/lib/supabase/performance';
+import { isGameplanFetchError } from '@/lib/gameplan/gameplanErrors';
+import {
+  generateStubGameplan,
+  isProtocolDateStale,
+} from '@/lib/gameplan/generateStubGameplan';
+import { isDegenerateMicrocycle } from '@/lib/gameplan/microcycleValidation';
+import { getTodayDayIndex } from '@/lib/gameplan/microcycleWeek';
+import { syncPerformanceQueueAndRecalibrate } from '@/lib/supabase/sync';
+import { fetchLibraryCombat, fetchLibraryExercises } from '@/lib/catalog/library';
+import { buildWorkoutSessionSummary } from '@/lib/workout/buildSessionSummary';
 import { getSupabase } from '@/lib/supabase/client';
 import type { BiologicalProfile } from '@/types/biological';
-import { initialBiologicalProfile, isBiologicalProfileComplete } from '@/types/biological';
-import type { DailyGameplan, GameplanBlockStatus } from '@/types/gameplan';
+import {
+  DEFAULT_TRAINING_DAYS_PER_WEEK,
+  initialBiologicalProfile,
+  isBiologicalProfileComplete,
+} from '@/types/biological';
+import type {
+  DailyGameplan,
+  GameplanBlock,
+  GameplanBlockStatus,
+  MicrocycleDay,
+} from '@/types/gameplan';
 import type {
   CombatSessionLog,
   IronSessionLog,
   PerformanceLogEntry,
   PerformanceQueueItem,
   SpiritSessionLog,
+  LogIronSetInput,
   WorkoutCompletionInput,
+  WorkoutSessionSummary,
 } from '@/types/performance';
 
-export type { WorkoutCompletionInput, PerformanceQueueItem } from '@/types/performance';
+export type { WorkoutCompletionInput, PerformanceQueueItem, LogIronSetInput } from '@/types/performance';
 
 /** Equipment tags aligned with SRS REQ-1.3 / `user_environment` schema */
 export type EquipmentTag =
@@ -60,10 +79,112 @@ export interface UserFoundation {
 
 function applyGameplanToState(gameplan: DailyGameplan, source: SommaState['gameplan_source']) {
   return {
-    currentGameplan: gameplan,
-    daily_gameplan: gameplan,
+    weeklyMicrocycle: gameplan.microcycle,
+    protocolDate: gameplan.date,
+    weekStartDate: gameplan.week_start_date ?? null,
+    protocolGeneratedAt: gameplan.generated_at,
+    selectedDayIndex: getTodayDayIndex(gameplan.week_start_date),
     gameplan_source: source,
   };
+}
+
+function mergeBlockStatuses(
+  microcycle: MicrocycleDay[],
+  previous: MicrocycleDay[] | null,
+): MicrocycleDay[] {
+  if (!previous) return microcycle;
+
+  return microcycle.map((day) => {
+    const previousDay = previous.find((entry) => entry.day_index === day.day_index);
+    return {
+      ...day,
+      is_completed: previousDay?.is_completed ?? day.is_completed,
+      blocks: day.blocks.map((block) => {
+        const wasCompleted = previous
+          .flatMap((prevDay) => prevDay.blocks)
+          .find((prev) => prev.id === block.id)?.status;
+        return wasCompleted === 'completed' ? { ...block, status: 'completed' as const } : block;
+      }),
+    };
+  });
+}
+
+/** Resolve a microcycle day by day_index (1 = Monday … 7 = Sunday) */
+export function getMicrocycleDay(
+  microcycle: MicrocycleDay[] | null,
+  dayIndex: number,
+): MicrocycleDay | null {
+  return microcycle?.find((day) => day.day_index === dayIndex) ?? null;
+}
+
+/** Today's blocks for attunement / ritual progress HUD */
+export function getTodayBlocksFromStore(state: {
+  weeklyMicrocycle: MicrocycleDay[] | null;
+  weekStartDate: string | null;
+}): GameplanBlock[] {
+  const todayIndex = getTodayDayIndex(state.weekStartDate);
+  return getMicrocycleDay(state.weeklyMicrocycle, todayIndex)?.blocks ?? [];
+}
+
+/** True when every training block on the selected strip day is completed */
+export function isSelectedDayProtocolComplete(state: {
+  weeklyMicrocycle: MicrocycleDay[] | null;
+  selectedDayIndex: number;
+}): boolean {
+  const day = getMicrocycleDay(state.weeklyMicrocycle, state.selectedDayIndex);
+  if (!day || day.is_rest_day || day.blocks.length === 0) return false;
+  return day.blocks.every((block) => block.status === 'completed');
+}
+
+function markDayCompletedIfReady(
+  microcycle: MicrocycleDay[] | null,
+  dayIndex: number,
+): MicrocycleDay[] | null {
+  if (!microcycle) return microcycle;
+
+  return microcycle.map((day) => {
+    if (day.day_index !== dayIndex || day.is_rest_day) return day;
+    const allBlocksDone =
+      day.blocks.length > 0 && day.blocks.every((block) => block.status === 'completed');
+    return allBlocksDone ? { ...day, is_completed: true } : day;
+  });
+}
+
+function upsertIronSetLog(
+  logs: PerformanceLogEntry[],
+  input: LogIronSetInput,
+): PerformanceLogEntry[] {
+  const logId = `iron-${input.block_id}-${input.exercise_id}`;
+  const existing = logs.find((entry) => entry.id === logId);
+
+  const ironSession: IronSessionLog = existing?.iron
+    ? {
+        ...existing.iron,
+        sets: [...existing.iron.sets.filter((set) => set.set_index !== input.set.set_index), input.set].sort(
+          (a, b) => a.set_index - b.set_index,
+        ),
+      }
+    : {
+        block_id: input.block_id,
+        exercise_id: input.exercise_id,
+        exercise_name: input.exercise_name,
+        sets: [input.set],
+        completed_at: input.set.logged_at,
+      };
+
+  const entry: PerformanceLogEntry = {
+    id: logId,
+    pillar: 'iron',
+    block_id: input.block_id,
+    iron: ironSession,
+    timestamp: input.set.logged_at,
+  };
+
+  if (existing) {
+    return logs.map((row) => (row.id === logId ? entry : row));
+  }
+
+  return [entry, ...logs];
 }
 
 interface SommaState {
@@ -71,25 +192,39 @@ interface SommaState {
   user_stats: UserStats;
   user_foundation: UserFoundation;
   user_biological: BiologicalProfile;
-  /** Today's AI protocol — primary read surface for Daily Command */
-  currentGameplan: DailyGameplan | null;
-  /** @deprecated alias — kept in sync with currentGameplan */
-  daily_gameplan: DailyGameplan | null;
+  /** 7-day Head Coach microcycle (Mon–Sun) */
+  weeklyMicrocycle: MicrocycleDay[] | null;
+  /** Calendar date the protocol was generated for (staleness gate) */
+  protocolDate: string | null;
+  weekStartDate: string | null;
+  protocolGeneratedAt: string | null;
+  /** Active day in the strip (1 = Monday … 7 = Sunday) */
+  selectedDayIndex: number;
+  setSelectedDayIndex: (dayIndex: number) => void;
   performance_logs: PerformanceLogEntry[];
   performanceQueue: PerformanceQueueItem[];
   performance_syncing: boolean;
+  lastWorkoutSummary: WorkoutSessionSummary | null;
   setUserEnvironment: (patch: Partial<UserEnvironment>) => void;
   setUserStats: (patch: Partial<UserStats>) => void;
   setUserFoundation: (patch: Partial<UserFoundation>) => void;
   setUserBiological: (patch: Partial<BiologicalProfile>) => void;
-  setCurrentGameplan: (gameplan: DailyGameplan | null, source?: SommaState['gameplan_source']) => void;
+  setWeeklyMicrocycle: (
+    gameplan: DailyGameplan | null,
+    source?: SommaState['gameplan_source'],
+  ) => void;
   gameplan_loading: boolean;
   gameplan_source: 'ai' | 'fallback' | 'stub' | 'deterministic' | null;
+  /** Set when Head Coach / Edge generation fails — Home shows Neural Link Failed */
+  gameplan_error: string | null;
+  clearGameplanError: () => void;
   ensureDailyGameplan: () => void;
   fetchDailyGameplanAsync: (options?: { forceRefresh?: boolean }) => Promise<void>;
   regenerateDailyGameplan: () => Promise<void>;
   setBlockStatus: (blockId: string, status: GameplanBlockStatus) => void;
   completeBlock: (blockId: string) => void;
+  logIronSet: (input: LogIronSetInput) => void;
+  prepareWorkoutSummary: () => Promise<WorkoutSessionSummary | null>;
   appendIronSession: (log: IronSessionLog) => void;
   appendCombatSession: (log: CombatSessionLog) => void;
   appendSpiritSession: (log: SpiritSessionLog) => void;
@@ -137,13 +272,18 @@ export const useSommaStore = create<SommaState>()(
       user_stats: initialStats,
       user_foundation: initialFoundation,
       user_biological: { ...initialBiologicalProfile },
-      currentGameplan: null,
-      daily_gameplan: null,
+      weeklyMicrocycle: null,
+      protocolDate: null,
+      weekStartDate: null,
+      protocolGeneratedAt: null,
+      selectedDayIndex: getTodayDayIndex(),
       performance_logs: [],
       performanceQueue: [],
       performance_syncing: false,
+      lastWorkoutSummary: null,
       gameplan_loading: false,
       gameplan_source: null,
+      gameplan_error: null,
 
       setUserEnvironment: (patch) =>
         set((state) => ({
@@ -169,26 +309,49 @@ export const useSommaStore = create<SommaState>()(
           user_biological: { ...state.user_biological, ...patch },
         })),
 
-      setCurrentGameplan: (gameplan, source) =>
-        set((state) => ({
-          currentGameplan: gameplan,
-          daily_gameplan: gameplan,
-          gameplan_source: source ?? state.gameplan_source,
-        })),
+      setSelectedDayIndex: (dayIndex) =>
+        set({
+          selectedDayIndex: Math.min(7, Math.max(1, Math.round(dayIndex))),
+        }),
+
+      clearGameplanError: () => set({ gameplan_error: null }),
+
+      setWeeklyMicrocycle: (gameplan, source) =>
+        set((state) =>
+          gameplan
+            ? {
+                ...applyGameplanToState(gameplan, source ?? state.gameplan_source),
+              }
+            : {
+                weeklyMicrocycle: null,
+                protocolDate: null,
+                weekStartDate: null,
+                protocolGeneratedAt: null,
+                gameplan_source: source ?? state.gameplan_source,
+              },
+        ),
 
       ensureDailyGameplan: () =>
         set((state) => {
           const focus = state.user_foundation.focus_preference;
           if (!focus) return state;
 
-          const active = state.currentGameplan ?? state.daily_gameplan;
-          if (!isGameplanStale(active)) {
+          if (!isProtocolDateStale(state.protocolDate) && state.weeklyMicrocycle) {
             return state;
           }
 
-          const gameplan = generateStubGameplan(focus, state.user_environment.available_equipment);
+          if (isSupabaseConfigured) {
+            return state;
+          }
+
+          const gameplan = generateStubGameplan(
+            focus,
+            state.user_environment.available_equipment,
+            state.user_biological.training_days_per_week ?? DEFAULT_TRAINING_DAYS_PER_WEEK,
+          );
           return {
             ...applyGameplanToState(gameplan, 'stub'),
+            gameplan_error: null,
           };
         }),
 
@@ -197,32 +360,54 @@ export const useSommaStore = create<SommaState>()(
         const focus = state.user_foundation.focus_preference;
         if (!focus) return;
 
-        set({ gameplan_loading: true });
+        const trainingDays =
+          state.user_biological.training_days_per_week ?? DEFAULT_TRAINING_DAYS_PER_WEEK;
+
+        set({ gameplan_loading: true, gameplan_error: null });
 
         try {
           const userId = (await getSupabase()?.auth.getSession())?.data.session?.user?.id ?? null;
-          const gameplan = await fetchDailyGameplan({
+          const result = await fetchDailyGameplan({
             focus,
             equipment: state.user_environment.available_equipment,
             userId,
             forceRefresh: options?.forceRefresh ?? false,
+            trainingDaysPerWeek: trainingDays,
           });
-
-          const source: SommaState['gameplan_source'] =
-            isSupabaseConfigured && userId ? 'ai' : 'stub';
 
           set({
-            ...applyGameplanToState(gameplan, source),
+            ...applyGameplanToState(result.gameplan, result.source),
             gameplan_loading: false,
+            gameplan_error: null,
           });
-        } catch {
+        } catch (error) {
+          if (isSupabaseConfigured) {
+            const message = isGameplanFetchError(error)
+              ? error.message
+              : error instanceof Error
+                ? error.message
+                : 'Neural link failed — could not reach Head Coach';
+            console.error('[SOMMA] fetchDailyGameplanAsync failed:', message, error);
+            set({
+              gameplan_loading: false,
+              gameplan_error: message,
+              weeklyMicrocycle: null,
+              protocolDate: null,
+              weekStartDate: null,
+              protocolGeneratedAt: null,
+            });
+            return;
+          }
+
           const gameplan = generateStubGameplan(
             focus,
             state.user_environment.available_equipment,
+            trainingDays,
           );
           set({
-            ...applyGameplanToState(gameplan, 'fallback'),
+            ...applyGameplanToState(gameplan, 'stub'),
             gameplan_loading: false,
+            gameplan_error: null,
           });
         }
       },
@@ -233,33 +418,103 @@ export const useSommaStore = create<SommaState>()(
 
       setBlockStatus: (blockId, status) =>
         set((state) => {
-          const plan = state.currentGameplan ?? state.daily_gameplan;
-          if (!plan) return state;
+          if (!state.weeklyMicrocycle) return state;
 
-          const next = {
-            ...plan,
-            blocks: plan.blocks.map((block) =>
-              block.id === blockId ? { ...block, status } : block,
-            ),
+          return {
+            weeklyMicrocycle: state.weeklyMicrocycle.map((day) => ({
+              ...day,
+              blocks: day.blocks.map((block) =>
+                block.id === blockId ? { ...block, status } : block,
+              ),
+            })),
           };
-
-          return applyGameplanToState(next, state.gameplan_source);
         }),
 
       completeBlock: (blockId) =>
         set((state) => {
-          const plan = state.currentGameplan ?? state.daily_gameplan;
-          if (!plan) return state;
+          if (!state.weeklyMicrocycle) return state;
 
-          const next = {
-            ...plan,
-            blocks: plan.blocks.map((block) =>
+          const withBlockComplete = state.weeklyMicrocycle.map((day) => ({
+            ...day,
+            blocks: day.blocks.map((block) =>
               block.id === blockId ? { ...block, status: 'completed' as const } : block,
             ),
-          };
+          }));
 
-          return applyGameplanToState(next, state.gameplan_source);
+          return {
+            weeklyMicrocycle: markDayCompletedIfReady(
+              withBlockComplete,
+              state.selectedDayIndex,
+            ),
+          };
         }),
+
+      logIronSet: (input) => {
+        const state = get();
+        const queueItem: PerformanceQueueItem = {
+          id: `queue-set-${input.block_id}-${input.exercise_id}-${input.set.set_index}-${Date.now()}`,
+          kind: 'iron_set',
+          input: {
+            block_id: input.block_id,
+            pillar: 'iron',
+            exercise_id: input.exercise_id,
+            weight_used: input.set.weight_kg,
+            reps_completed: input.set.reps,
+            target_rir: input.target_rir ?? null,
+          },
+          session: null,
+          iron_set: input.set,
+          created_at: input.set.logged_at,
+        };
+
+        set({
+          performance_logs: upsertIronSetLog(state.performance_logs, input),
+          performanceQueue: [...state.performanceQueue, queueItem],
+        });
+
+        const focus = state.user_foundation.focus_preference;
+        const equipment = state.user_environment.available_equipment;
+
+        void (async () => {
+          if (!focus) return;
+          try {
+            await syncPerformanceQueueAndRecalibrate([queueItem], {
+              focus,
+              equipment,
+              recalibrate: false,
+            });
+            set({
+              performanceQueue: get().performanceQueue.filter((item) => item.id !== queueItem.id),
+            });
+          } catch (err) {
+            console.warn('[SOMMA] Iron set sync deferred:', err);
+          }
+        })();
+      },
+
+      prepareWorkoutSummary: async () => {
+        const state = get();
+        try {
+          const [exerciseCatalog, combatCatalog] = await Promise.all([
+            fetchLibraryExercises(),
+            fetchLibraryCombat(),
+          ]);
+
+          const summary = buildWorkoutSessionSummary({
+            dayIndex: state.selectedDayIndex,
+            weeklyMicrocycle: state.weeklyMicrocycle,
+            performanceLogs: state.performance_logs,
+            exerciseCatalog,
+            combatCatalog,
+          });
+
+          set({ lastWorkoutSummary: summary });
+          return summary;
+        } catch (err) {
+          console.warn('[SOMMA] prepareWorkoutSummary failed:', err);
+          return null;
+        }
+      },
 
       appendIronSession: (log) =>
         set((state) => ({
@@ -316,23 +571,27 @@ export const useSommaStore = create<SommaState>()(
           const result = await syncPerformanceQueueAndRecalibrate(state.performanceQueue, {
             focus,
             equipment: state.user_environment.available_equipment,
+            trainingDaysPerWeek:
+              state.user_biological.training_days_per_week ?? DEFAULT_TRAINING_DAYS_PER_WEEK,
           });
 
           if (result.insertedCount > 0) {
-            const previous = get().currentGameplan ?? get().daily_gameplan;
+            const previousMicrocycle = get().weeklyMicrocycle;
             const patch: Partial<SommaState> = { performanceQueue: [] };
 
             if (result.gameplan) {
-              const mergedBlocks = result.gameplan.blocks.map((block) => {
-                const wasCompleted =
-                  previous?.blocks.find((prev) => prev.id === block.id)?.status === 'completed';
-                return wasCompleted ? { ...block, status: 'completed' as const } : block;
-              });
+              const mergedMicrocycle = mergeBlockStatuses(
+                result.gameplan.microcycle,
+                previousMicrocycle,
+              );
 
-              Object.assign(patch, applyGameplanToState(
-                { ...result.gameplan, blocks: mergedBlocks },
-                result.source ?? 'ai',
-              ));
+              Object.assign(
+                patch,
+                applyGameplanToState(
+                  { ...result.gameplan, microcycle: mergedMicrocycle },
+                  result.source ?? 'ai',
+                ),
+              );
             }
 
             set(patch);
@@ -368,24 +627,31 @@ export const useSommaStore = create<SommaState>()(
             const result = await syncPerformanceQueueAndRecalibrate([queueItem], {
               focus,
               equipment,
+              trainingDaysPerWeek:
+                get().user_biological.training_days_per_week ?? DEFAULT_TRAINING_DAYS_PER_WEEK,
             });
 
             if (result.gameplan) {
-              const previous = get().currentGameplan ?? get().daily_gameplan;
-              const mergedBlocks = result.gameplan.blocks.map((block) => {
-                const wasCompleted =
-                  previous?.blocks.find((prev) => prev.id === block.id)?.status === 'completed';
-                return wasCompleted ? { ...block, status: 'completed' as const } : block;
-              });
+              const previousMicrocycle = get().weeklyMicrocycle;
+              const mergedMicrocycle = mergeBlockStatuses(
+                result.gameplan.microcycle,
+                previousMicrocycle,
+              );
 
               set({
                 ...applyGameplanToState(
-                  { ...result.gameplan, blocks: mergedBlocks },
+                  { ...result.gameplan, microcycle: mergedMicrocycle },
                   result.source ?? 'ai',
                 ),
                 performanceQueue: get().performanceQueue.filter((item) => item.id !== queueItem.id),
               });
               return;
+            }
+
+            if (result.insertedCount > 0) {
+              set({
+                performanceQueue: get().performanceQueue.filter((item) => item.id !== queueItem.id),
+              });
             }
           }
         } catch (err) {
@@ -396,7 +662,11 @@ export const useSommaStore = create<SommaState>()(
       },
 
       completeFoundationScan: ({ focus_preference, available_equipment, biological }) => {
-        const gameplan = generateStubGameplan(focus_preference, available_equipment);
+        const gameplan = generateStubGameplan(
+          focus_preference,
+          available_equipment,
+          biological.training_days_per_week ?? DEFAULT_TRAINING_DAYS_PER_WEEK,
+        );
         set({
           user_foundation: {
             focus_preference,
@@ -423,13 +693,18 @@ export const useSommaStore = create<SommaState>()(
           user_stats: { ...initialStats },
           user_foundation: { ...initialFoundation },
           user_biological: { ...initialBiologicalProfile },
-          currentGameplan: null,
-          daily_gameplan: null,
+          weeklyMicrocycle: null,
+          protocolDate: null,
+          weekStartDate: null,
+          protocolGeneratedAt: null,
+          selectedDayIndex: getTodayDayIndex(),
           performance_logs: [],
           performanceQueue: [],
           performance_syncing: false,
+          lastWorkoutSummary: null,
           gameplan_loading: false,
           gameplan_source: null,
+          gameplan_error: null,
         });
 
         try {
@@ -451,18 +726,60 @@ export const useSommaStore = create<SommaState>()(
         user_stats: state.user_stats,
         user_foundation: state.user_foundation,
         user_biological: state.user_biological,
-        currentGameplan: state.currentGameplan,
-        daily_gameplan: state.daily_gameplan,
+        weeklyMicrocycle: state.weeklyMicrocycle,
+        protocolDate: state.protocolDate,
+        weekStartDate: state.weekStartDate,
+        protocolGeneratedAt: state.protocolGeneratedAt,
+        selectedDayIndex: state.selectedDayIndex,
         performance_logs: state.performance_logs,
         performanceQueue: state.performanceQueue,
+        lastWorkoutSummary: state.lastWorkoutSummary,
       }),
       onRehydrateStorage: () => (state) => {
         if (!state) return;
         if (!state.user_biological) {
           state.user_biological = { ...initialBiologicalProfile };
+        } else {
+          state.user_biological = {
+            ...initialBiologicalProfile,
+            ...state.user_biological,
+            training_days_per_week:
+              state.user_biological.training_days_per_week ?? DEFAULT_TRAINING_DAYS_PER_WEEK,
+          };
         }
-        if (!state.currentGameplan && state.daily_gameplan) {
-          state.currentGameplan = state.daily_gameplan;
+        const legacy = state as SommaState & {
+          currentGameplan?: DailyGameplan | null;
+          daily_gameplan?: DailyGameplan | null;
+        };
+
+        if (!state.weeklyMicrocycle) {
+          const legacyPlan = legacy.currentGameplan ?? legacy.daily_gameplan;
+          if (legacyPlan?.microcycle?.length) {
+            state.weeklyMicrocycle = legacyPlan.microcycle;
+            state.protocolDate = legacyPlan.date;
+            state.weekStartDate = legacyPlan.week_start_date ?? null;
+            state.protocolGeneratedAt = legacyPlan.generated_at;
+          }
+        }
+
+        if (!state.selectedDayIndex) {
+          state.selectedDayIndex = getTodayDayIndex(state.weekStartDate);
+        } else if (isProtocolDateStale(state.protocolDate)) {
+          state.selectedDayIndex = getTodayDayIndex(state.weekStartDate);
+        }
+
+        const expectedTraining =
+          state.user_biological.training_days_per_week ?? DEFAULT_TRAINING_DAYS_PER_WEEK;
+        if (
+          state.weeklyMicrocycle &&
+          isDegenerateMicrocycle(state.weeklyMicrocycle, expectedTraining)
+        ) {
+          console.warn('[SOMMA] Cleared degenerate persisted microcycle on rehydrate');
+          state.weeklyMicrocycle = null;
+          state.protocolDate = null;
+          state.weekStartDate = null;
+          state.protocolGeneratedAt = null;
+          state.gameplan_source = null;
         }
       },
     },

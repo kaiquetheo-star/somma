@@ -1,5 +1,12 @@
-import type { DailyGameplan, GameplanBlock, WorkoutPillar } from '@/types/gameplan';
+import {
+  dateForDayIndex,
+  getDayIndexForDate,
+  getWeekStartMonday,
+  spreadTrainingDayIndices,
+} from '@/lib/gameplan/microcycleWeek';
+import type { DailyGameplan, GameplanBlock, MicrocycleDay, WorkoutPillar } from '@/types/gameplan';
 import type { EquipmentTag, FocusPreference } from '@/store/useSommaStore';
+import { DEFAULT_TRAINING_DAYS_PER_WEEK } from '@/types/biological';
 
 function todayDateKey(): string {
   return new Date().toISOString().slice(0, 10);
@@ -32,6 +39,7 @@ function createBlock(
 export function generateStubGameplan(
   focus: FocusPreference,
   equipment: EquipmentTag[],
+  trainingDaysPerWeek?: number,
 ): DailyGameplan {
   const ranked = [
     { pillar: 'iron' as const, weight: focus.iron },
@@ -132,14 +140,43 @@ export function generateStubGameplan(
     );
   }
 
+  const date = todayDateKey();
+  const week_start_date = getWeekStartMonday(date);
+  const training_days_per_week = trainingDaysPerWeek ?? DEFAULT_TRAINING_DAYS_PER_WEEK;
+  const trainingIndices = new Set(spreadTrainingDayIndices(training_days_per_week));
+
+  const microcycle: MicrocycleDay[] = Array.from({ length: 7 }, (_, index) => {
+    const day_index = index + 1;
+    const isTraining = trainingIndices.has(day_index);
+    return {
+      day_index,
+      is_rest_day: !isTraining,
+      focus_label: isTraining ? 'Stub protocol' : 'Rest & Recovery',
+      date: dateForDayIndex(week_start_date, day_index),
+      blocks: isTraining ? blocks : [],
+    };
+  });
+
+  const todayIndex = getDayIndexForDate(date, week_start_date);
+  const todayBlocks =
+    microcycle.find((day) => day.day_index === todayIndex)?.blocks ?? [];
+
   return {
-    date: todayDateKey(),
-    blocks,
+    date,
+    week_start_date,
+    training_days_per_week,
+    microcycle,
+    blocks: todayBlocks,
     generated_at: new Date().toISOString(),
   };
 }
 
+export function isProtocolDateStale(protocolDate: string | null): boolean {
+  if (!protocolDate) return true;
+  return protocolDate !== todayDateKey();
+}
+
 export function isGameplanStale(gameplan: DailyGameplan | null): boolean {
   if (!gameplan) return true;
-  return gameplan.date !== todayDateKey();
+  return isProtocolDateStale(gameplan.date);
 }

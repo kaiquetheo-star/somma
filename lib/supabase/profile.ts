@@ -1,10 +1,4 @@
-import type {
-  BiologicalProfile,
-  CombatGoal,
-  FlowGoal,
-  IronGoal,
-  SpiritGoal,
-} from '@/types/biological';
+import type { BiologicalProfile } from '@/types/biological';
 import { isBiologicalProfileComplete } from '@/types/biological';
 import type {
   EquipmentTag,
@@ -16,7 +10,7 @@ import { useSommaStore } from '@/store/useSommaStore';
 import { getSupabase } from '@/lib/supabase/client';
 
 const PROFILE_BIOLOGY_SELECT =
-  'focus_preference, date_of_birth, weight_kg, height_cm, body_fat_percentage, current_injuries, baseline_stress_level, goal_iron, goal_combat, goal_flow, goal_spirit';
+  'focus_preference, date_of_birth, weight_kg, height_cm, body_fat_percentage, current_injuries, baseline_stress_level, training_days_per_week, goal_iron, goal_combat, goal_flow, goal_spirit';
 
 /** Ensures the Supabase client has a JWT before PostgREST calls (avoids opaque 401s). */
 async function requireAuthenticatedUserId(expectedUserId?: string): Promise<string> {
@@ -42,22 +36,6 @@ async function requireAuthenticatedUserId(expectedUserId?: string): Promise<stri
   return session.user.id;
 }
 
-function asGoal<T extends string>(raw: unknown, allowed: readonly T[]): T | null {
-  return typeof raw === 'string' && (allowed as readonly string[]).includes(raw)
-    ? (raw as T)
-    : null;
-}
-
-const IRON_GOAL_OPTIONS = ['Hypertrophy', 'Strength', 'Endurance', 'Recomposition'] as const;
-const COMBAT_GOAL_OPTIONS = [
-  'Cardio Conditioning',
-  'Technical Mastery',
-  'Power Development',
-  'Self-Defence',
-] as const;
-const FLOW_GOAL_OPTIONS = ['Mobility', 'Recovery', 'Flexibility', 'Stress Relief'] as const;
-const SPIRIT_GOAL_OPTIONS = ['Breathwork', 'Meditation', 'Recovery', 'Pre-Session Prime'] as const;
-
 function mapProfileBiology(row: Record<string, unknown> | null): BiologicalProfile {
   if (!row) {
     return {
@@ -71,8 +49,18 @@ function mapProfileBiology(row: Record<string, unknown> | null): BiologicalProfi
       goal_combat: null,
       goal_flow: null,
       goal_spirit: null,
+      training_days_per_week: null,
     };
   }
+
+  const goalText = (key: string) =>
+    typeof row[key] === 'string' && row[key].trim() ? row[key].trim() : null;
+
+  const trainingDaysRaw = row.training_days_per_week;
+  const training_days_per_week =
+    trainingDaysRaw != null
+      ? Math.min(7, Math.max(1, Math.round(Number(trainingDaysRaw))))
+      : null;
 
   return {
     date_of_birth: typeof row.date_of_birth === 'string' ? row.date_of_birth : null,
@@ -84,10 +72,13 @@ function mapProfileBiology(row: Record<string, unknown> | null): BiologicalProfi
       typeof row.current_injuries === 'string' ? row.current_injuries : null,
     baseline_stress_level:
       row.baseline_stress_level != null ? Number(row.baseline_stress_level) : null,
-    goal_iron: asGoal<IronGoal>(row.goal_iron, IRON_GOAL_OPTIONS),
-    goal_combat: asGoal<CombatGoal>(row.goal_combat, COMBAT_GOAL_OPTIONS),
-    goal_flow: asGoal<FlowGoal>(row.goal_flow, FLOW_GOAL_OPTIONS),
-    goal_spirit: asGoal<SpiritGoal>(row.goal_spirit, SPIRIT_GOAL_OPTIONS),
+    goal_iron: goalText('goal_iron'),
+    goal_combat: goalText('goal_combat'),
+    goal_flow: goalText('goal_flow'),
+    goal_spirit: goalText('goal_spirit'),
+    training_days_per_week: Number.isFinite(training_days_per_week)
+      ? training_days_per_week
+      : null,
   };
 }
 
@@ -213,6 +204,7 @@ export async function syncFoundationToSupabase(
       goal_combat: payload.biological.goal_combat,
       goal_flow: payload.biological.goal_flow,
       goal_spirit: payload.biological.goal_spirit,
+      training_days_per_week: payload.biological.training_days_per_week,
     }),
     supabase.from('user_environment').upsert({
       user_id: authedUserId,
@@ -255,6 +247,7 @@ export async function upsertBiologicalPassport(
     goal_combat: biological.goal_combat,
     goal_flow: biological.goal_flow,
     goal_spirit: biological.goal_spirit,
+    training_days_per_week: biological.training_days_per_week,
   });
 
   if (error) throw error;
