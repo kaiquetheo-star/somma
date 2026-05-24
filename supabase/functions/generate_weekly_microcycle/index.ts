@@ -1,9 +1,10 @@
 /**
  * Canonical Head Coach entry — 7-day microcycle generation.
- * Delegates to the shared handler in generate_daily_protocol (same prompt + sanitizers).
+ * Zero-Cost Clinical Engine: delegates to deterministic handler in generate_daily_protocol ($0 API).
  *
  * Deploy: supabase functions deploy generate_weekly_microcycle
  */
+// CLINICAL ENGINE: DETERMINISTIC ONLY. NO RANDOMNESS ALLOWED. IF INPUTS ARE CONSTANT, OUTPUT MUST BE CONSTANT.
 import { corsHeaders } from '../_shared/cors.ts';
 import { handleHeadCoachRequest } from '../generate_daily_protocol/index.ts';
 

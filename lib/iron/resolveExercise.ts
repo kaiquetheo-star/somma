@@ -50,7 +50,7 @@ export function resolveIronExerciseView(options: ResolveOptions): ResolvedIronEx
   return {
     exercise_id: exerciseId,
     alternative_exercise_id: prescription.alternative_exercise_id ?? null,
-    name: library?.name ?? fallbackName,
+    name: prescription.display_name ?? library?.name ?? fallbackName,
     instructions: library?.biomechanical_instructions ?? {},
     target_sets: prescription.target_sets ?? fallbackSets,
     target_reps: prescription.target_reps ?? fallbackReps,

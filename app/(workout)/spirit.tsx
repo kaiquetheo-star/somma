@@ -16,6 +16,7 @@ import {
   SPIRIT_SANCTUARY,
 } from '@/constants/spirit';
 import { useActiveGameplanBlock } from '@/hooks/useActiveGameplanBlock';
+import { useRequireDailyScan } from '@/hooks/useRequireDailyScan';
 import { useBreathworkEngine } from '@/hooks/useBreathworkEngine';
 import { useFlowAsanaSession } from '@/hooks/useFlowAsanaSession';
 import { useSpiritBreathCatalog } from '@/hooks/useSpiritBreathCatalog';
@@ -54,7 +55,8 @@ const DEFAULT_FLOW_ASANAS: FlowAsanaPrescription[] = [
 
 export default function SpiritModeScreen() {
   const router = useRouter();
-  const { blockId } = useLocalSearchParams<{ blockId?: string; title?: string }>();
+  const { blockId, title } = useLocalSearchParams<{ blockId?: string; title?: string }>();
+  useRequireDailyScan({ blockId, title, pillar: 'spirit' });
   const activeBlock = useActiveGameplanBlock(blockId);
   const { finishBlock } = useWorkoutNavigation();
   const appendSpiritSession = useSommaStore((state) => state.appendSpiritSession);

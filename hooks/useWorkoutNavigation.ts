@@ -43,6 +43,20 @@ export function useWorkoutNavigation() {
     if (block.status === 'completed') return;
 
     setBlockStatus(block.id, 'active');
+
+    const needsScan = useSommaStore.getState().needsDailyReadinessScan();
+    if (needsScan) {
+      router.push({
+        pathname: '/(workout)/daily_scan',
+        params: {
+          blockId: block.id,
+          title: block.title,
+          pillar: block.pillar,
+        },
+      } as unknown as Href);
+      return;
+    }
+
     const route = WORKOUT_ROUTES[block.pillar];
     router.push({
       pathname: route,

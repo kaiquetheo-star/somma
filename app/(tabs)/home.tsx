@@ -4,6 +4,7 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-nati
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AttunementOrbsPanel } from '@/components/sanctuary/AttunementOrbsPanel';
+import { ReviewForm } from '@/components/clinical/ReviewForm';
 import { GameplanBlockCard } from '@/components/sanctuary/GameplanBlockCard';
 import { WeeklyMicrocycleStrip } from '@/components/sanctuary/WeeklyMicrocycleStrip';
 import { useUserStatsRealtime } from '@/hooks/useUserStatsRealtime';
@@ -42,6 +43,10 @@ export default function DailyCommandScreen() {
   const ensureDailyGameplan = useSommaStore((state) => state.ensureDailyGameplan);
   const fetchDailyGameplanAsync = useSommaStore((state) => state.fetchDailyGameplanAsync);
   const regenerateDailyGameplan = useSommaStore((state) => state.regenerateDailyGameplan);
+  const getClinicalReviewTrigger = useSommaStore((state) => state.getClinicalReviewTrigger);
+  const submitClinicalExitInterview = useSommaStore((state) => state.submitClinicalExitInterview);
+
+  const clinicalReviewTrigger = getClinicalReviewTrigger();
 
   const { openBlock } = useWorkoutNavigation();
 
@@ -102,7 +107,7 @@ export default function DailyCommandScreen() {
   const sourceLabel =
     gameplanSource === 'ai'
       ? 'AI protocol'
-      : gameplanSource === 'deterministic'
+      : gameplanSource === 'local' || gameplanSource === 'deterministic'
         ? 'Expert protocol'
         : gameplanSource === 'fallback'
           ? 'Fallback protocol'
@@ -138,6 +143,16 @@ export default function DailyCommandScreen() {
               todayDayIndex={todayDayIndex}
               onSelectDay={setSelectedDayIndex}
             />
+
+            {clinicalReviewTrigger ? (
+              <View className="mt-8">
+                <ReviewForm
+                  title={clinicalReviewTrigger.title}
+                  description={clinicalReviewTrigger.description}
+                  onSubmit={(interview) => void submitClinicalExitInterview(interview)}
+                />
+              </View>
+            ) : null}
 
             <View className="mt-10 gap-3">
               <View className="flex-row items-end justify-between">

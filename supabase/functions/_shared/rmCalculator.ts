@@ -108,3 +108,45 @@ export function estimateBestE1RMFromLogs(
 
   return best > 0 ? roundWeightKg(best) : null;
 }
+
+/** True when the athlete has logged at least one working set for this movement. */
+export function hasIronHistoryForExercise(
+  logs: EdgePerformanceLogSample[],
+  exerciseId: string,
+): boolean {
+  return estimateBestE1RMFromLogs(logs, exerciseId) != null;
+}
+
+/**
+ * Prescription load — E1RM-derived or last logged weight only.
+ * Never invent a load from body mass or LLM guesses when history is empty.
+ */
+export function resolvePrescriptionTargetWeight(
+  exerciseId: string,
+  aiOrFallbackWeight: number | null | undefined,
+  logs: EdgePerformanceLogSample[],
+  goalType: string | null | undefined,
+  targetReps: number,
+  targetRir: number,
+): number | null {
+  const e1rm = estimateBestE1RMFromLogs(logs, exerciseId);
+  if (e1rm != null) {
+    return targetWeightFromE1RM(e1rm, goalType, targetReps, targetRir);
+  }
+
+  for (const log of logs) {
+    if (!logMatchesExercise(log, exerciseId)) continue;
+    if (log.weight_used != null && log.weight_used > 0) {
+      return roundWeightKg(log.weight_used);
+    }
+    for (const sample of collectSetSamples(log)) {
+      if (sample.weightKg > 0) return roundWeightKg(sample.weightKg);
+    }
+  }
+
+  if (aiOrFallbackWeight != null && Number.isFinite(aiOrFallbackWeight) && aiOrFallbackWeight > 0) {
+    return null;
+  }
+
+  return null;
+}

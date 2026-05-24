@@ -1,4 +1,6 @@
 import { isSupabaseConfigured } from '@/lib/config';
+import { applyCnsFatigueFromQueue } from '@/lib/supabase/cnsFatigue';
+import { clampCnsFatigueProfile } from '@/types/biological';
 import {
   fetchDailyGameplan,
   type GameplanSource,
@@ -6,7 +8,9 @@ import {
 import { isGameplanFetchError } from '@/lib/gameplan/gameplanErrors';
 import { getSupabase } from '@/lib/supabase/client';
 import type { DailyGameplan } from '@/types/gameplan';
-import type { FocusPreference, EquipmentTag } from '@/store/useSommaStore';
+import type { FocusPreference, EquipmentTag, UserStats } from '@/store/useSommaStore';
+import type { BiologicalProfile } from '@/types/biological';
+import type { PerformanceLogEntry } from '@/types/performance';
 import type { IronSetLog, PerformanceQueueItem } from '@/types/performance';
 
 const UUID_RE =
@@ -16,6 +20,7 @@ export interface SyncPerformanceResult {
   insertedCount: number;
   gameplan: DailyGameplan | null;
   source: GameplanSource | null;
+  cns_fatigue_score: number | null;
 }
 
 function toNullableUuid(value: string | null | undefined): string | null {
@@ -154,28 +159,41 @@ export async function syncPerformanceQueueAndRecalibrate(
   context: {
     focus: FocusPreference;
     equipment: EquipmentTag[];
-    trainingDaysPerWeek?: number;
+    biological: BiologicalProfile;
+    userStats: UserStats;
+    performanceLogs: PerformanceLogEntry[];
     /** When false, only inserts rows (used for per-set streaming sync). */
     recalibrate?: boolean;
   },
 ): Promise<SyncPerformanceResult> {
   try {
     if (queue.length === 0) {
-      return { insertedCount: 0, gameplan: null, source: null };
+      return { insertedCount: 0, gameplan: null, source: null, cns_fatigue_score: null };
     }
 
     const { insertedCount, userId } = await insertPerformanceQueueRows(queue);
     if (insertedCount === 0) {
-      return { insertedCount: 0, gameplan: null, source: null };
+      return { insertedCount: 0, gameplan: null, source: null, cns_fatigue_score: null };
+    }
+
+    let cnsFatigueScore: number | null = null;
+    if (userId) {
+      const current = clampCnsFatigueProfile(context.biological.cns_fatigue_score);
+      cnsFatigueScore = await applyCnsFatigueFromQueue(userId, queue, current);
     }
 
     if (context.recalibrate === false) {
-      return { insertedCount, gameplan: null, source: null };
+      return { insertedCount, gameplan: null, source: null, cns_fatigue_score: cnsFatigueScore };
     }
 
     if (!isSupabaseConfigured || !userId) {
-      return { insertedCount, gameplan: null, source: null };
+      return { insertedCount, gameplan: null, source: null, cns_fatigue_score: cnsFatigueScore };
     }
+
+    const biologicalForRecalibrate =
+      cnsFatigueScore != null
+        ? { ...context.biological, cns_fatigue_score: cnsFatigueScore }
+        : context.biological;
 
     try {
       const result = await fetchDailyGameplan({
@@ -183,13 +201,16 @@ export async function syncPerformanceQueueAndRecalibrate(
         equipment: context.equipment,
         userId,
         forceRefresh: true,
-        trainingDaysPerWeek: context.trainingDaysPerWeek,
+        biological: biologicalForRecalibrate,
+        userStats: context.userStats,
+        performanceLogs: context.performanceLogs,
       });
 
       return {
         insertedCount,
         gameplan: result.gameplan,
         source: result.source,
+        cns_fatigue_score: cnsFatigueScore,
       };
     } catch (error) {
       const message = isGameplanFetchError(error)
@@ -198,14 +219,19 @@ export async function syncPerformanceQueueAndRecalibrate(
           ? error.message
           : 'Recalibration failed';
       console.warn('[SOMMA] Head Coach recalibration failed:', message);
-      return { insertedCount, gameplan: null, source: 'fallback' };
+      return {
+        insertedCount,
+        gameplan: null,
+        source: 'fallback',
+        cns_fatigue_score: cnsFatigueScore,
+      };
     }
   } catch (err) {
     console.warn(
       '[SOMMA] Performance sync error:',
       err instanceof Error ? err.message : err,
     );
-    return { insertedCount: 0, gameplan: null, source: null };
+    return { insertedCount: 0, gameplan: null, source: null, cns_fatigue_score: null };
   }
 }
 

@@ -11,6 +11,8 @@ interface ExerciseCueCardProps {
   instructions: Record<string, string>;
   progressionNote?: string;
   biomechanics?: IronExerciseBiomechanics | null;
+  /** Keys already shown in InstructionPanel — omitted from deep-dive list */
+  excludeKeys?: string[];
 }
 
 const CUE_ORDER = ['setup', 'eccentric', 'concentric', 'safety', 'regression'] as const;
@@ -76,17 +78,23 @@ export function ExerciseCueCard({
   instructions,
   progressionNote,
   biomechanics,
+  excludeKeys = [],
 }: ExerciseCueCardProps) {
   const [expanded, setExpanded] = useState(false);
+  const excluded = new Set(excludeKeys);
 
   const entries = [
     ...CUE_ORDER.flatMap((key) => {
+      if (excluded.has(key)) return [];
       const value = instructions[key];
       if (!value) return [];
       return [{ key, label: CUE_LABELS[key] ?? key, value }];
     }),
     ...Object.entries(instructions)
-      .filter(([key]) => !CUE_ORDER.includes(key as (typeof CUE_ORDER)[number]))
+      .filter(
+        ([key]) =>
+          !CUE_ORDER.includes(key as (typeof CUE_ORDER)[number]) && !excluded.has(key),
+      )
       .map(([key, value]) => ({
         key,
         label: key.replace(/_/g, ' '),

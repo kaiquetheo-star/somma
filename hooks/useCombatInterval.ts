@@ -6,7 +6,7 @@ import {
   comboCalloutFull,
   comboCalloutDelayMs,
   isWorkBurnoutPhase,
-  pickRandomComboCallout,
+  pickDeterministicComboCallout,
   type CombatCombo,
 } from '@/constants/combat';
 import { playRoundBell, playTenSecondWarning } from '@/lib/audio/combatAudio';
@@ -67,6 +67,7 @@ export function useCombatInterval({
   const [isBurnoutCadence, setIsBurnoutCadence] = useState(false);
 
   const comboCalloutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const comboCalloutTickRef = useRef(0);
   const transitionLockRef = useRef(false);
   const tenSecondCueFiredRef = useRef(false);
   const workRoundKeyRef = useRef('');
@@ -202,7 +203,9 @@ export function useCombatInterval({
       }
 
       const left = Math.max(0, Math.ceil((phaseEndsAtMsRef.current - Date.now()) / 1000));
-      setComboCallout(pickRandomComboCallout(currentCombo.sequence));
+      const tick = comboCalloutTickRef.current;
+      comboCalloutTickRef.current += 1;
+      setComboCallout(pickDeterministicComboCallout(currentCombo.sequence, tick));
       setIsBurnoutCadence(isWorkBurnoutPhase(left));
 
       if (left <= 0) return;
@@ -212,7 +215,8 @@ export function useCombatInterval({
     };
 
     const endsAt = phaseEndsAtMsRef.current;
-    setComboCallout(pickRandomComboCallout(currentCombo.sequence));
+    comboCalloutTickRef.current = 0;
+    setComboCallout(pickDeterministicComboCallout(currentCombo.sequence, 0));
     const initialLeft = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
     setIsBurnoutCadence(isWorkBurnoutPhase(initialLeft));
     comboCalloutTimerRef.current = setTimeout(

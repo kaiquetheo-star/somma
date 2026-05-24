@@ -1,5 +1,5 @@
 import { calculateE1RM, estimateBestE1RMFromLogs } from '@/lib/physics/rmCalculator';
-import { getMicrocycleDay } from '@/store/useSommaStore';
+import { getMicrocycleDay } from '@/lib/gameplan/microcycleWeek';
 import type { LibraryCombatCombo, LibraryExercise } from '@/lib/catalog/library';
 import type { MicrocycleDay } from '@/types/gameplan';
 import type {

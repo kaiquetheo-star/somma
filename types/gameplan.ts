@@ -1,3 +1,5 @@
+import type { ClinicalReviewTrigger } from '@/types/clinical';
+
 export type WorkoutPillar = 'iron' | 'combat' | 'spirit';
 
 export type GameplanBlockStatus = 'pending' | 'active' | 'completed';
@@ -13,6 +15,8 @@ export type IronExecutionTechnique =
 
 export interface IronExercisePrescription {
   exercise_id: string;
+  /** UI-safe label — strips catalog numeric prefixes */
+  display_name?: string;
   target_sets: number;
   /** Upper bound of rep range (logging compatibility) */
   target_reps: number;
@@ -153,6 +157,8 @@ export interface DailyGameplan {
   training_days_per_week?: number;
   /** Full 7-day plan from the AI clinic */
   microcycle: MicrocycleDay[];
+  /** Optional UI trigger — e.g. End-of-Month Clinical Exit Interview */
+  clinical_review_trigger?: ClinicalReviewTrigger | null;
   /** Today's ritual blocks (derived from microcycle or legacy single-day payload) */
   blocks: GameplanBlock[];
   generated_at: string;

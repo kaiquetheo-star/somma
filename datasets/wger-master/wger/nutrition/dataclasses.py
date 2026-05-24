@@ -1,0 +1,116 @@
+# This file is part of wger Workout Manager.
+#
+# wger Workout Manager is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# wger Workout Manager is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+
+# Standard Library
+from dataclasses import (
+    asdict,
+    dataclass,
+)
+from typing import Optional
+
+# wger
+from wger.nutrition.helpers import (
+    change_html_entities_to_human_readable,
+    remove_problematic_characters,
+)
+
+
+@dataclass
+class WeightUnitData:
+    uuid: str
+    name: str
+    gram: int
+
+
+@dataclass
+class IngredientData:
+    name: str
+    remote_id: str
+    language_id: int
+    energy: float
+    protein: float
+    carbohydrates: float
+    carbohydrates_sugar: Optional[float]
+    fat: float
+    fat_saturated: Optional[float]
+    fiber: Optional[float]
+    sodium: Optional[float]
+    code: Optional[str]
+    source_name: str
+    source_url: str
+    common_name: str
+    brand: str
+    license_id: int
+    license_author: str
+    license_title: str
+    license_object_url: str
+    license_derivative_source_url: str = ''
+    license_author_url: str = ''
+    is_vegan: Optional[bool] = None
+    is_vegetarian: Optional[bool] = None
+    serving_size_gram: Optional[int] = None
+    serving_size_unit: Optional[str] = None
+    serving_size_amount: Optional[float] = None
+    nutriscore: Optional[str] = None
+
+    def sanity_checks(self):
+        if not self.name:
+            raise ValueError('Name is empty!')
+        self.name = self.name[:200]
+        self.brand = self.brand[:200]
+        self.common_name = self.common_name[:200]
+        self.license_title = self.license_title[:200]
+
+        # Mass checks (not more than 100g of something per 100g of product etc)
+        macros = [
+            'protein',
+            'fat',
+            'fat_saturated',
+            'carbohydrates',
+            'carbohydrates_sugar',
+            'sodium',
+            'fiber',
+        ]
+        for macro in macros:
+            value = getattr(self, macro)
+            if value and value > 100:
+                raise ValueError(f'Value for {macro} is greater than 100: {value}')
+
+        if self.fat_saturated and self.fat_saturated > self.fat:
+            raise ValueError(
+                f'Saturated fat is greater than fat: {self.fat_saturated} > {self.fat}'
+            )
+
+        if self.carbohydrates_sugar and self.carbohydrates_sugar > self.carbohydrates:
+            raise ValueError(
+                f'Sugar is greater than carbohydrates: '
+                f'{self.carbohydrates_sugar} > {self.carbohydrates}'
+            )
+
+        if self.carbohydrates + self.protein + self.fat > 100:
+            raise ValueError('Total of carbohydrates, protein and fat is greater than 100!')
+
+        if self.nutriscore is not None and self.nutriscore not in ('a', 'b', 'c', 'd', 'e'):
+            raise ValueError(f'Invalid nutriscore value: {self.nutriscore}')
+
+    def dict(self):
+        data = asdict(self)
+        data.pop('serving_size_gram', None)
+        data.pop('serving_size_unit', None)
+        data.pop('serving_size_amount', None)
+        return data
+
+    def clean_name(self):
+        self.name = remove_problematic_characters(self.name)
+        self.name = change_html_entities_to_human_readable(self.name)

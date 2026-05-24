@@ -6,13 +6,15 @@ import { ExerciseCueCard } from '@/components/iron/ExerciseCueCard';
 import { TargetLoadBanner } from '@/components/iron/TargetLoadBanner';
 import { RestTimerOverlay } from '@/components/iron/RestTimerOverlay';
 import { ValueStepper } from '@/components/iron/ValueStepper';
-import { ModularMovementPlayer } from '@/components/ui/ModularMovementPlayer';
+import { CommandCenterShell } from '@/components/command-center/CommandCenterShell';
+import { InstructionPanel } from '@/components/command-center/InstructionPanel';
 import { WorkoutShell } from '@/components/workout/WorkoutShell';
 import {
   resolveIronExercise,
   type IronExerciseTemplate,
 } from '@/constants/iron-exercises';
 import { useActiveGameplanBlock } from '@/hooks/useActiveGameplanBlock';
+import { useRequireDailyScan } from '@/hooks/useRequireDailyScan';
 import { useWorkoutNavigation } from '@/hooks/useWorkoutNavigation';
 import { useRestTimer } from '@/hooks/useRestTimer';
 import {
@@ -21,6 +23,7 @@ import {
   type LibraryExercise,
 } from '@/lib/catalog/library';
 import { resolveIronExerciseView } from '@/lib/iron/resolveExercise';
+import { resolvePrimaryInstruction } from '@/lib/iron/instructionCues';
 import { hapticSetLogged } from '@/lib/haptics';
 import { getTargetWeight } from '@/lib/physics/rmCalculator';
 import type { IronExerciseBiomechanics } from '@/types/catalog';
@@ -60,6 +63,7 @@ function stubPrescriptionFromTemplate(template: IronExerciseTemplate): IronExerc
 export default function IronModeScreen() {
   const { user } = useAuth();
   const { blockId, title } = useLocalSearchParams<{ blockId?: string; title?: string }>();
+  useRequireDailyScan({ blockId, title, pillar: 'iron' });
   const activeBlock = useActiveGameplanBlock(blockId);
   const { finishBlock } = useWorkoutNavigation();
   const equipment = useSommaStore((state) => state.user_environment.available_equipment);
@@ -400,6 +404,8 @@ export default function IronModeScreen() {
             const itemCanAdapt =
               Boolean(queuedExercise.alternative_exercise_id) &&
               queuedExercise.alternative_exercise_id !== queuedExercise.exercise_id;
+            const primaryInstruction = resolvePrimaryInstruction(queuedExercise.instructions);
+            const instructionExcludeKeys = primaryInstruction ? [primaryInstruction.key] : [];
 
             return (
               <Pressable
@@ -414,70 +420,67 @@ export default function IronModeScreen() {
                     : 'border-white/8 bg-white/[0.02] opacity-80'
                 }`}
               >
-                <View className="flex-row items-start justify-between">
-                  <View className="flex-1 pr-3">
-                    <Text className="font-body text-[10px] uppercase tracking-[0.35em] text-[#6B7568]">
-                      Movement {index + 1} of {exerciseQueue.length}
-                      {isActive ? ' · active' : ''}
-                    </Text>
-                    <Text className="mt-2 font-body text-sm text-[#8A9488]">
-                      {queuedExercise.target_rep_range}
-                    </Text>
-                    <Text className="mt-1 font-body text-[10px] uppercase tracking-[0.25em] text-[#6B7568]">
-                      {queuedExercise.target_sets} sets × {queuedExercise.target_reps} reps
-                      {queuedExercise.execution_technique
-                        ? ` · ${queuedExercise.execution_technique}`
-                        : ''}
-                      {isActive
-                        ? ` · Set ${Math.min(currentSet, totalSets)}/${totalSets}`
-                        : ''}
-                      {isActive && phase === 'done' ? ' · Ready to advance' : ''}
-                    </Text>
-                  </View>
-                  {isActive ? (
-                    <Pressable
-                      onPress={handleAdapt}
-                      disabled={phase === 'resting' || !itemCanAdapt}
-                      className={`rounded-xl border px-3 py-2 active:opacity-80 ${
-                        itemCanAdapt
-                          ? 'border-matte-gold/30 bg-matte-gold/10'
-                          : 'border-white/10 bg-white/5 opacity-40'
-                      }`}
-                    >
-                      <Text className="font-body text-[10px] uppercase tracking-[0.2em] text-matte-gold">
-                        Adapt
+                {isActive ? (
+                  <CommandCenterShell
+                    pillarLabel="Iron · Command"
+                    title={queuedExercise.name}
+                    meta={`Movement ${index + 1}/${exerciseQueue.length} · Set ${Math.min(currentSet, totalSets)}/${totalSets}${phase === 'done' ? ' · Ready to advance' : ''}`}
+                  >
+                    <InstructionPanel instructions={queuedExercise.instructions ?? {}} />
+
+                    <TargetLoadBanner
+                      targetKg={targetLoadKg}
+                      repRange={queuedExercise.target_rep_range}
+                      source={targetLoadSource}
+                    />
+
+                    <ExerciseCueCard
+                      instructions={queuedExercise.instructions ?? {}}
+                      progressionNote={queuedExercise.progression_note}
+                      biomechanics={biomechanicsFromLibrary(queuedLibrary)}
+                      excludeKeys={instructionExcludeKeys}
+                    />
+                  </CommandCenterShell>
+                ) : (
+                  <View className="flex-row items-start justify-between">
+                    <View className="flex-1 pr-3">
+                      <Text className="font-body text-[10px] uppercase tracking-[0.35em] text-[#6B7568]">
+                        Movement {index + 1} of {exerciseQueue.length}
                       </Text>
-                    </Pressable>
-                  ) : null}
-                </View>
-
-                {isActive ? (
-                  <ModularMovementPlayer
-                    url={queuedLibrary?.visual_asset_url}
-                    type={queuedLibrary?.visual_asset_type}
-                    movementName={queuedExercise.name}
-                    subtitle={queuedExercise.target_rep_range}
-                    accent="gold"
-                    height={196}
-                  />
-                ) : null}
-
-                {isActive ? (
-                  <TargetLoadBanner
-                    targetKg={targetLoadKg}
-                    repRange={queuedExercise.target_rep_range}
-                    source={targetLoadSource}
-                  />
-                ) : null}
-
-                <ExerciseCueCard
-                  instructions={queuedExercise.instructions ?? {}}
-                  progressionNote={queuedExercise.progression_note}
-                  biomechanics={biomechanicsFromLibrary(queuedLibrary)}
-                />
+                      <Text className="mt-2 font-display-bold text-lg text-[#E8E4DC]">
+                        {queuedExercise.name}
+                      </Text>
+                      <Text className="mt-2 font-body text-sm text-[#8A9488]">
+                        {queuedExercise.target_rep_range}
+                      </Text>
+                      <Text className="mt-1 font-body text-[10px] uppercase tracking-[0.25em] text-[#6B7568]">
+                        {queuedExercise.target_sets} sets × {queuedExercise.target_reps} reps
+                        {queuedExercise.execution_technique
+                          ? ` · ${queuedExercise.execution_technique}`
+                          : ''}
+                      </Text>
+                    </View>
+                  </View>
+                )}
 
                 {isActive ? (
                   <>
+                    <View className="flex-row justify-end">
+                      <Pressable
+                        onPress={handleAdapt}
+                        disabled={phase === 'resting' || !itemCanAdapt}
+                        className={`rounded-xl border px-3 py-2 active:opacity-80 ${
+                          itemCanAdapt
+                            ? 'border-matte-gold/30 bg-matte-gold/10'
+                            : 'border-white/10 bg-white/5 opacity-40'
+                        }`}
+                      >
+                        <Text className="font-body text-[10px] uppercase tracking-[0.2em] text-matte-gold">
+                          Adapt
+                        </Text>
+                      </Pressable>
+                    </View>
+
                     {itemCanAdapt && activeLibrary ? (
                       <Text className="font-body text-xs text-[#6B7568]">
                         Swap ready ·{' '}

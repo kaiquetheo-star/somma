@@ -20,6 +20,7 @@ import { RpeSelector } from '@/components/combat/RpeSelector';
 import { CommandCenterShell } from '@/components/command-center/CommandCenterShell';
 import { COMBAT_ARENA, comboCalloutFull, formatTimer } from '@/constants/combat';
 import { useActiveGameplanBlock } from '@/hooks/useActiveGameplanBlock';
+import { useRequireDailyScan } from '@/hooks/useRequireDailyScan';
 import {
   comboFromLibrary,
   useCombatInterval,
@@ -47,6 +48,7 @@ const DEFAULT_END_RPE = 7;
 export default function CombatModeScreen() {
   const router = useRouter();
   const { blockId, title } = useLocalSearchParams<{ blockId?: string; title?: string }>();
+  useRequireDailyScan({ blockId, title, pillar: 'combat' });
   const activeBlock = useActiveGameplanBlock(blockId);
   const combatMastery = useSommaStore((state) => state.user_stats.combat_mastery);
   const { finishBlock } = useWorkoutNavigation();

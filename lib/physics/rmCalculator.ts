@@ -118,9 +118,18 @@ export function estimateBestE1RMFromLogs(
   return best > 0 ? roundWeightKg(best) : null;
 }
 
+/** True when the athlete has logged at least one working set for this movement. */
+export function hasIronHistoryForExercise(
+  logs: PerformanceLogSample[],
+  exerciseId: string,
+): boolean {
+  return estimateBestE1RMFromLogs(logs, exerciseId) != null;
+}
+
 /**
  * Queries performance_logs for the last 3 weeks, estimates E1RM (Epley),
  * and returns goal-aware target weight for the prescribed reps / RIR.
+ * Returns null when no history — never a flat body-mass guess.
  */
 export async function getTargetWeight(
   userId: string,

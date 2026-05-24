@@ -1,5 +1,7 @@
 /** Monday-based week helpers for 7-day microcycles (day_index 1 = Monday … 7 = Sunday) */
 
+import type { MicrocycleDay } from '@/types/gameplan';
+
 export const MICROCYCLE_DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 
 function todayDateKey(): string {
@@ -40,6 +42,14 @@ export function dateForDayIndex(weekStartDate: string, dayIndex: number): string
   if (Number.isNaN(start.getTime())) return weekStartDate;
   start.setDate(start.getDate() + dayIndex - 1);
   return start.toISOString().slice(0, 10);
+}
+
+/** Resolve a microcycle day by day_index (1 = Monday … 7 = Sunday) */
+export function getMicrocycleDay(
+  microcycle: MicrocycleDay[] | null,
+  dayIndex: number,
+): MicrocycleDay | null {
+  return microcycle?.find((day) => day.day_index === dayIndex) ?? null;
 }
 
 /** Spread N training days across Mon–Sun (1–7) */

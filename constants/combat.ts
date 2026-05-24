@@ -65,17 +65,22 @@ export function comboCalloutFull(combo: CombatCombo): string {
   return combo.sequence.map((s) => s.toUpperCase()).join(' - ');
 }
 
-/** Random contiguous pad-work callout from a catalog sequence */
-export function pickRandomComboCallout(sequence: string[]): string {
+/** Random contiguous pad-work callout from a catalog sequence (deterministic by tick index) */
+export function pickDeterministicComboCallout(sequence: string[], tick = 0): string {
   if (!sequence.length) return '';
   const maxLen = Math.min(sequence.length, 4);
-  const len = Math.max(2, Math.floor(Math.random() * maxLen) + 1);
-  const start = Math.floor(Math.random() * sequence.length);
+  const len = Math.max(2, (tick % (maxLen - 1)) + 2);
+  const start = tick % sequence.length;
   const slice: string[] = [];
   for (let i = 0; i < len; i += 1) {
     slice.push(sequence[(start + i) % sequence.length]!);
   }
   return slice.map((s) => s.toUpperCase()).join(' - ');
+}
+
+/** @deprecated Use pickDeterministicComboCallout */
+export function pickRandomComboCallout(sequence: string[]): string {
+  return pickDeterministicComboCallout(sequence, 0);
 }
 
 /** True during the final 30 seconds of a work round */
@@ -90,8 +95,8 @@ export function isWorkBuildPhase(timeRemainingSec: number, workSeconds: number):
   return timeRemainingSec > workSeconds / 2;
 }
 
-function randomMs(min: number, max: number): number {
-  return min + Math.floor(Math.random() * (max - min + 1));
+function midpointMs(min: number, max: number): number {
+  return Math.round((min + max) / 2);
 }
 
 /**
@@ -103,10 +108,10 @@ export function comboCalloutDelayMs(
   workSeconds: number,
 ): number {
   if (isWorkBurnoutPhase(timeRemainingSec)) {
-    return randomMs(COMBAT_CADENCE_BURNOUT_MIN_MS, COMBAT_CADENCE_BURNOUT_MAX_MS);
+    return midpointMs(COMBAT_CADENCE_BURNOUT_MIN_MS, COMBAT_CADENCE_BURNOUT_MAX_MS);
   }
   if (isWorkBuildPhase(timeRemainingSec, workSeconds)) {
-    return randomMs(COMBAT_CADENCE_BUILD_MIN_MS, COMBAT_CADENCE_BUILD_MAX_MS);
+    return midpointMs(COMBAT_CADENCE_BUILD_MIN_MS, COMBAT_CADENCE_BUILD_MAX_MS);
   }
-  return randomMs(COMBAT_CADENCE_BUILD_MIN_MS, COMBAT_CADENCE_BUILD_MAX_MS);
+  return midpointMs(COMBAT_CADENCE_BUILD_MIN_MS, COMBAT_CADENCE_BUILD_MAX_MS);
 }

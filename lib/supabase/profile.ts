@@ -1,5 +1,18 @@
 import type { BiologicalProfile } from '@/types/biological';
-import { isBiologicalProfileComplete } from '@/types/biological';
+import {
+  clampPillarTimeMinutes,
+  clampPillarFrequency,
+  clampCnsFatigueProfile,
+  clampMesocycleWeekProfile,
+  DEFAULT_AVAILABLE_TIME_COMBAT,
+  DEFAULT_AVAILABLE_TIME_IRON,
+  DEFAULT_AVAILABLE_TIME_SPIRIT,
+  DEFAULT_FREQUENCY_COMBAT,
+  DEFAULT_FREQUENCY_IRON,
+  DEFAULT_FREQUENCY_SPIRIT,
+  deriveTrainingDaysFromFrequencies,
+  isBiologicalProfileComplete,
+} from '@/types/biological';
 import type {
   EquipmentTag,
   FocusPreference,
@@ -10,7 +23,7 @@ import { useSommaStore } from '@/store/useSommaStore';
 import { getSupabase } from '@/lib/supabase/client';
 
 const PROFILE_BIOLOGY_SELECT =
-  'focus_preference, date_of_birth, weight_kg, height_cm, body_fat_percentage, current_injuries, baseline_stress_level, training_days_per_week, goal_iron, goal_combat, goal_flow, goal_spirit';
+  'focus_preference, date_of_birth, weight_kg, height_cm, body_fat_percentage, current_injuries, baseline_stress_level, training_days_per_week, goal_iron, goal_combat, goal_flow, goal_spirit, available_time_iron, available_time_combat, available_time_spirit, frequency_iron, frequency_combat, frequency_spirit, mesocycle_week, cns_fatigue_score';
 
 /** Ensures the Supabase client has a JWT before PostgREST calls (avoids opaque 401s). */
 async function requireAuthenticatedUserId(expectedUserId?: string): Promise<string> {
@@ -50,6 +63,15 @@ function mapProfileBiology(row: Record<string, unknown> | null): BiologicalProfi
       goal_flow: null,
       goal_spirit: null,
       training_days_per_week: null,
+      available_time_iron: null,
+      available_time_combat: null,
+      available_time_spirit: null,
+      frequency_iron: null,
+      frequency_combat: null,
+      frequency_spirit: null,
+      mesocycle_week: null,
+      cns_fatigue_score: null,
+      clinical_exit_interview: null,
     };
   }
 
@@ -79,6 +101,43 @@ function mapProfileBiology(row: Record<string, unknown> | null): BiologicalProfi
     training_days_per_week: Number.isFinite(training_days_per_week)
       ? training_days_per_week
       : null,
+    available_time_iron: clampPillarTimeMinutes(
+      row.available_time_iron != null ? Number(row.available_time_iron) : null,
+      15,
+      180,
+      DEFAULT_AVAILABLE_TIME_IRON,
+    ),
+    available_time_combat: clampPillarTimeMinutes(
+      row.available_time_combat != null ? Number(row.available_time_combat) : null,
+      10,
+      120,
+      DEFAULT_AVAILABLE_TIME_COMBAT,
+    ),
+    available_time_spirit: clampPillarTimeMinutes(
+      row.available_time_spirit != null ? Number(row.available_time_spirit) : null,
+      5,
+      90,
+      DEFAULT_AVAILABLE_TIME_SPIRIT,
+    ),
+    frequency_iron: clampPillarFrequency(
+      row.frequency_iron != null ? Number(row.frequency_iron) : null,
+      DEFAULT_FREQUENCY_IRON,
+    ),
+    frequency_combat: clampPillarFrequency(
+      row.frequency_combat != null ? Number(row.frequency_combat) : null,
+      DEFAULT_FREQUENCY_COMBAT,
+    ),
+    frequency_spirit: clampPillarFrequency(
+      row.frequency_spirit != null ? Number(row.frequency_spirit) : null,
+      DEFAULT_FREQUENCY_SPIRIT,
+    ),
+    mesocycle_week: clampMesocycleWeekProfile(
+      row.mesocycle_week != null ? Number(row.mesocycle_week) : null,
+    ),
+    cns_fatigue_score: clampCnsFatigueProfile(
+      row.cns_fatigue_score != null ? Number(row.cns_fatigue_score) : null,
+    ),
+    clinical_exit_interview: null,
   };
 }
 
@@ -149,9 +208,10 @@ export async function fetchRemoteUserSnapshot(
   };
 }
 
-/** Pull Supabase rows into Zustand for offline-first reads */
+/** Pull Supabase rows into Zustand for offline-first reads (no gameplan mutation). */
 export function hydrateLocalStoreFromRemote(snapshot: RemoteUserSnapshot): void {
-  const { completeFoundationScan, setUserStats, setUserBiological } = useSommaStore.getState();
+  const { hydrateFoundationFromRemote, setUserStats, setUserBiological } =
+    useSommaStore.getState();
 
   if (snapshot.user_biological) {
     setUserBiological(snapshot.user_biological);
@@ -163,7 +223,7 @@ export function hydrateLocalStoreFromRemote(snapshot: RemoteUserSnapshot): void 
     snapshot.available_equipment.length > 0 &&
     isBiologicalProfileComplete(snapshot.user_biological)
   ) {
-    completeFoundationScan({
+    hydrateFoundationFromRemote({
       focus_preference: snapshot.focus_preference,
       available_equipment: snapshot.available_equipment,
       biological: snapshot.user_biological,
@@ -205,6 +265,14 @@ export async function syncFoundationToSupabase(
       goal_flow: payload.biological.goal_flow,
       goal_spirit: payload.biological.goal_spirit,
       training_days_per_week: payload.biological.training_days_per_week,
+      available_time_iron: payload.biological.available_time_iron,
+      available_time_combat: payload.biological.available_time_combat,
+      available_time_spirit: payload.biological.available_time_spirit,
+      frequency_iron: payload.biological.frequency_iron,
+      frequency_combat: payload.biological.frequency_combat,
+      frequency_spirit: payload.biological.frequency_spirit,
+      mesocycle_week: payload.biological.mesocycle_week,
+      cns_fatigue_score: payload.biological.cns_fatigue_score,
     }),
     supabase.from('user_environment').upsert({
       user_id: authedUserId,
@@ -248,6 +316,37 @@ export async function upsertBiologicalPassport(
     goal_flow: biological.goal_flow,
     goal_spirit: biological.goal_spirit,
     training_days_per_week: biological.training_days_per_week,
+    available_time_iron: biological.available_time_iron,
+    available_time_combat: biological.available_time_combat,
+    available_time_spirit: biological.available_time_spirit,
+    frequency_iron: biological.frequency_iron,
+    frequency_combat: biological.frequency_combat,
+    frequency_spirit: biological.frequency_spirit,
+  });
+
+  if (error) throw error;
+}
+
+/** Command Center steering wheel — granular frequencies + time budgets. */
+export async function upsertSteeringWheelSettings(
+  userId: string,
+  biological: BiologicalProfile,
+): Promise<void> {
+  const supabase = getSupabase();
+  if (!supabase) return;
+
+  const authedUserId = await requireAuthenticatedUserId(userId);
+  const training_days_per_week = deriveTrainingDaysFromFrequencies(biological);
+
+  const { error } = await supabase.from('profiles').upsert({
+    id: authedUserId,
+    frequency_iron: biological.frequency_iron,
+    frequency_combat: biological.frequency_combat,
+    frequency_spirit: biological.frequency_spirit,
+    available_time_iron: biological.available_time_iron,
+    available_time_combat: biological.available_time_combat,
+    available_time_spirit: biological.available_time_spirit,
+    training_days_per_week,
   });
 
   if (error) throw error;

@@ -1,9 +1,24 @@
+// CLINICAL ENGINE: DETERMINISTIC ONLY. NO RANDOMNESS ALLOWED. IF INPUTS ARE CONSTANT, OUTPUT MUST BE CONSTANT.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { corsHeaders } from '../_shared/cors.ts';
 import {
+  applyDeloadToIronExercise,
+  capIronExercisesForDeload,
+  CNS_FATIGUE_AUTOREG_THRESHOLD,
+  isDeloadMesocycleWeek,
+  prependBiomechanicalAsanas,
+  resolveBiomechanicalPrerequisiteSlugs,
+  scaleSpiritMinutesForDeload,
+  clampMesocycleWeek,
+} from '../_shared/clinicalEngine.ts';
+import { selectExercisesByIronBlueprint } from '../_shared/ironBlueprints.ts';
+import {
   estimateBestE1RMFromLogs,
+  resolvePrescriptionTargetWeight,
   targetWeightFromE1RM,
 } from '../_shared/rmCalculator.ts';
+
+const PERFORMANCE_LOGS_QUERY_LIMIT = 80;
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -30,6 +45,7 @@ interface BiologicalPassport {
   body_fat_percentage: number | null;
   current_injuries: string | null;
   baseline_stress_level: number | null;
+  cns_fatigue_score: number | null;
 }
 
 interface PillarGoals {
@@ -52,7 +68,31 @@ interface ProfileRow {
   goal_combat: string | null;
   goal_flow: string | null;
   goal_spirit: string | null;
+  available_time_iron: number | null;
+  available_time_combat: number | null;
+  available_time_spirit: number | null;
+  frequency_iron: number | null;
+  frequency_combat: number | null;
+  frequency_spirit: number | null;
+  mesocycle_week: number | null;
+  cns_fatigue_score: number | null;
 }
+
+interface PillarFrequency {
+  frequency_iron: number;
+  frequency_combat: number;
+  frequency_spirit: number;
+}
+
+interface PillarTimeBudget {
+  available_time_iron: number;
+  available_time_combat: number;
+  available_time_spirit: number;
+}
+
+const DEFAULT_TIME_IRON_MIN = 45;
+const DEFAULT_TIME_COMBAT_MIN = 30;
+const DEFAULT_TIME_SPIRIT_MIN = 20;
 
 interface MicrocycleDayPayload {
   day_index: number;
@@ -125,6 +165,50 @@ interface PerformanceLogRow {
     iron?: { exercise_id?: string; sets?: unknown[] };
     combat?: { rounds?: unknown[]; volume?: number };
   } | null;
+}
+
+/** Strip bulky session blobs before LLM / in-memory expert pipelines */
+function slimPerformanceLogFromDb(row: {
+  pillar: string;
+  exercise_id: string | null;
+  weight_used: number | null;
+  reps_completed: number | null;
+  rpe_score: number | null;
+  timestamp: string;
+  payload: unknown;
+}): PerformanceLogRow {
+  const raw = row.payload as PerformanceLogRow['payload'] | null;
+  let payload: PerformanceLogRow['payload'] = null;
+
+  if (raw?.iron) {
+    const sets = Array.isArray(raw.iron.sets) ? raw.iron.sets : [];
+    payload = {
+      iron: {
+        exercise_id: raw.iron.exercise_id,
+        sets: sets.slice(0, 8).map((set) => {
+          const rowSet = set as { weight_kg?: number; reps?: number };
+          return {
+            weight_kg: rowSet.weight_kg ?? row.weight_used ?? 0,
+            reps: rowSet.reps ?? row.reps_completed ?? 0,
+          };
+        }),
+      },
+    };
+  } else if (row.pillar === 'combat' && raw && typeof raw === 'object') {
+    payload = {
+      volume: Number((raw as { volume?: number }).volume) || 0,
+    };
+  }
+
+  return {
+    pillar: row.pillar,
+    exercise_id: row.exercise_id,
+    weight_used: row.weight_used,
+    reps_completed: row.reps_completed,
+    rpe_score: row.rpe_score,
+    timestamp: row.timestamp,
+    payload,
+  };
 }
 
 type IronExecutionTechnique =
@@ -407,6 +491,8 @@ function mapBiologicalPassport(profile: ProfileRow | null): BiologicalPassport {
     current_injuries: profile?.current_injuries ?? null,
     baseline_stress_level:
       profile?.baseline_stress_level != null ? Number(profile.baseline_stress_level) : null,
+    cns_fatigue_score:
+      profile?.cns_fatigue_score != null ? Number(profile.cns_fatigue_score) : null,
   };
 }
 
@@ -428,6 +514,144 @@ function formatPillarGoal(goal: string | null, fallback: string): string {
 function clampTrainingDaysPerWeek(value: number | null | undefined): number {
   if (value == null || !Number.isFinite(value)) return 4;
   return Math.min(7, Math.max(1, Math.round(value)));
+}
+
+function clampPillarFrequency(value: number | null | undefined, fallback: number): number {
+  if (value == null || !Number.isFinite(value)) return fallback;
+  return Math.min(7, Math.max(0, Math.round(value)));
+}
+
+function resolvePillarFrequencies(profile: ProfileRow | null): PillarFrequency {
+  const legacy = clampTrainingDaysPerWeek(profile?.training_days_per_week);
+  return {
+    frequency_iron: clampPillarFrequency(profile?.frequency_iron, legacy),
+    frequency_combat: clampPillarFrequency(profile?.frequency_combat, legacy),
+    frequency_spirit: clampPillarFrequency(profile?.frequency_spirit, legacy),
+  };
+}
+
+function deriveActiveTrainingDays(pillarFreq: PillarFrequency): number {
+  return Math.max(
+    pillarFreq.frequency_iron,
+    pillarFreq.frequency_combat,
+    pillarFreq.frequency_spirit,
+  );
+}
+
+function spreadPillarDayIndices(count: number): number[] {
+  const n = Math.min(7, Math.max(0, Math.round(count)));
+  if (n === 0) return [];
+  if (n >= 7) return [1, 2, 3, 4, 5, 6, 7];
+  const indices = new Set<number>();
+  for (let i = 0; i < n; i += 1) {
+    const index =
+      n === 1 ? 4 : Math.min(7, Math.max(1, Math.round(1 + (6 * i) / (n - 1))));
+    indices.add(index);
+  }
+  for (let day = 1; day <= 7 && indices.size < n; day += 1) {
+    indices.add(day);
+  }
+  return [...indices].sort((a, b) => a - b);
+}
+
+function countPillarBlocks(
+  microcycle: MicrocycleDayPayload[],
+  pillar: 'iron' | 'combat' | 'spirit',
+): number {
+  return microcycle.reduce(
+    (sum, day) => sum + day.blocks.filter((block) => block.pillar === pillar).length,
+    0,
+  );
+}
+
+function clampPillarMinutes(
+  value: number | null | undefined,
+  min: number,
+  max: number,
+  fallback: number,
+): number {
+  if (value == null || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function resolvePillarTimeBudget(
+  profile: ProfileRow | null,
+  body: Record<string, unknown>,
+): PillarTimeBudget {
+  return {
+    available_time_iron: clampPillarMinutes(
+      body.available_time_iron != null
+        ? Number(body.available_time_iron)
+        : profile?.available_time_iron,
+      15,
+      180,
+      DEFAULT_TIME_IRON_MIN,
+    ),
+    available_time_combat: clampPillarMinutes(
+      body.available_time_combat != null
+        ? Number(body.available_time_combat)
+        : profile?.available_time_combat,
+      10,
+      120,
+      DEFAULT_TIME_COMBAT_MIN,
+    ),
+    available_time_spirit: clampPillarMinutes(
+      body.available_time_spirit != null
+        ? Number(body.available_time_spirit)
+        : profile?.available_time_spirit,
+      5,
+      90,
+      DEFAULT_TIME_SPIRIT_MIN,
+    ),
+  };
+}
+
+function isHypertrophyGoal(goalIron: string | null): boolean {
+  const normalized = (goalIron ?? '').trim().toLowerCase();
+  return (
+    normalized.includes('hypertrophy') ||
+    normalized.includes('powerbuilding') ||
+    normalized.includes('volume')
+  );
+}
+
+function targetIronExerciseCount(minutes: number, goalIron: string | null = null): number {
+  if (isHypertrophyGoal(goalIron)) {
+    if (minutes <= 35) return 6;
+    if (minutes <= 50) return 6;
+    if (minutes <= 65) return 7;
+    if (minutes <= 80) return 8;
+    return 8;
+  }
+  if (minutes <= 35) return 3;
+  if (minutes <= 50) return 4;
+  if (minutes <= 65) return 5;
+  if (minutes <= 80) return 6;
+  return 8;
+}
+
+function targetCombatRoundCount(minutes: number): number {
+  if (minutes <= 20) return 2;
+  if (minutes <= 35) return 3;
+  if (minutes <= 50) return 4;
+  return 5;
+}
+
+function expandRoutineIdsForTime(
+  routineIds: string[],
+  catalog: LibraryExercise[],
+  targetCount: number,
+): string[] {
+  const selected = [...routineIds];
+  const used = new Set(selected);
+  if (selected.length >= targetCount) return selected.slice(0, targetCount);
+  for (const row of catalog) {
+    if (used.has(row.id)) continue;
+    selected.push(row.id);
+    used.add(row.id);
+    if (selected.length >= targetCount) break;
+  }
+  return selected.slice(0, targetCount);
 }
 
 function getWeekStartMonday(dateKey: string): string {
@@ -505,8 +729,13 @@ function buildSystemPrompt(
   biological: BiologicalPassport,
   pillarGoals: PillarGoals,
   trainingDaysPerWeek: number,
+  pillarFreq: PillarFrequency,
+  pillarTime: PillarTimeBudget,
   availableAssetsTag: string,
 ): string {
+  const ironTarget = targetIronExerciseCount(pillarTime.available_time_iron, pillarGoals.goal_iron);
+  const combatRounds = targetCombatRoundCount(pillarTime.available_time_combat);
+  const hypertrophyAthlete = isHypertrophyGoal(pillarGoals.goal_iron);
   const injuryRule = biological.current_injuries?.trim()
     ? `ACTIVE INJURY CONSTRAINTS (mandatory): "${biological.current_injuries.trim()}". The server has already removed conflicting joint_stress_profile tags from the routine; you must NOT prescribe any exercise_id not in iron_expert.routine_exercise_ids.`
     : 'No active injuries reported — still use RIR and conservative technique selection.';
@@ -520,8 +749,8 @@ function buildSystemPrompt(
 
   const weightRule =
     biological.weight_kg != null
-      ? `Reference body mass: ${biological.weight_kg} kg. Estimate conservative target_weight_kg only when mesocycle has no logs for that exercise_id.`
-      : 'Body mass unknown — leave target_weight_kg null when no performance history.';
+      ? `Reference body mass: ${biological.weight_kg} kg — for context ONLY. NEVER derive target_weight_kg from body mass. When performance_logs / mesocycle has no history for an exercise_id, target_weight_kg MUST be null (athlete calibrates first set).`
+      : 'Body mass unknown — target_weight_kg MUST be null when no performance history exists for that exercise_id.';
 
   const ageRule =
     biological.age_years != null
@@ -531,22 +760,39 @@ function buildSystemPrompt(
   return `You are the Head Coach of the SOMMA Longevity Clinic. You plan a full 7-DAY MICROCYCLE (Monday–Sunday), not isolated random workouts. Orchestrate three specialized coaches across the week.
 
 MICROCYCLE LAW (mandatory):
-- Read \`training_days_per_week\` from the user payload (currently ${trainingDaysPerWeek}).
+- Read granular pillar frequencies from the user payload: Iron ${pillarFreq.frequency_iron}×/week, Combat ${pillarFreq.frequency_combat}×/week, Spirit ${pillarFreq.frequency_spirit}×/week.
 - Output \`microcycle\` with EXACTLY 7 objects: day_index 1 (Monday) through 7 (Sunday).
-- Exactly ${trainingDaysPerWeek} days MUST have is_rest_day: false; the other ${7 - trainingDaysPerWeek} days MUST be is_rest_day: true with focus_label "Rest & Recovery" and blocks: [].
-- Distribute training stress intelligently: no heavy squats/hinges on consecutive days; alternate push/pull/legs for 5–6 day splits; full-body spacing for 3 day splits.
-- Each training day includes a clear focus_label (e.g. "Iron: Push & Core", "Combat: Footwork", "Spirit: Active Recovery").
-- On training days, populate \`blocks\` with full pillar prescriptions (iron exercises[], combat rounds[], spirit sequence[]).
+- Days with no scheduled pillars MUST be is_rest_day: true with focus_label "Rest & Recovery" and blocks: [].
+- Up to ${trainingDaysPerWeek} days may be active (union of pillar days); distribute load intelligently — no heavy squats/hinges on consecutive iron days.
 
-STEP 1 (Head Coach): Analyze Biological Passport + \`performance_logs\`. Set global fatigue and weekly split strategy from training_days_per_week.
+STRICT FREQUENCY LAW (mandatory — violation = invalid response):
+- You MUST place exactly ${pillarFreq.frequency_iron} Iron blocks, ${pillarFreq.frequency_combat} Combat blocks, and ${pillarFreq.frequency_spirit} Spirit blocks across the 7-day microcycle JSON array.
+- Each block counts once by pillar type (iron | combat | spirit). Distribute them logically across the week — spread iron sessions, cluster combat when recovery allows, place spirit on iron or combat days for active recovery when frequencies align.
+- Pillar days may differ: e.g. Iron 6× + Spirit 6× + Combat 3× means some days have Iron+Spirit without Combat. Do NOT force all three pillars on every active day unless frequencies are equal.
 
-STEP 2 (Iron Coach): For each iron training day, prescribe full \`exercises\` arrays from <AVAILABLE_ASSETS> with progressive overload.
+HYBRID SCHEDULING LAW (when multiple pillars share a day):
+- Order blocks iron → combat → spirit (order 0→2) when co-scheduled.
+- Combat on shared days = post-iron conditioning — 2–4 rounds when legs were taxed bias upper-body focus.
+- Spirit on shared days = 10–20 min active recovery / breathwork targeting muscles stressed that day.
+- Rest days (is_rest_day: true): blocks [] only — no pillars scheduled.
 
-STEP 3 (Combat Coach): On combat days, respect prior-day muscle tax — legs heavy → Boxing upper-body focus; upper heavy → Muay Thai kicks/knees.
+STEP 1 (Head Coach): Analyze Biological Passport + \`performance_logs\`. Set global fatigue and weekly split strategy from granular pillar frequencies.
 
-STEP 4 (Flow/Spirit Coach): Place recovery / flow on lighter days and after hard combat or leg iron — full \`sequence\` arrays.
+STEP 2 (Iron Coach): For each iron training day, prescribe full \`exercises\` arrays from <AVAILABLE_ASSETS> with progressive overload. Use exercise_id UUIDs only — never invent movements.
+
+STEP 3 (Combat Coach): On **every training day** (not rest days), schedule combat as HIIT/cardio finisher after iron — respect prior-day muscle tax (legs heavy → Boxing upper-body focus; upper heavy → Muay Thai kicks/knees).
+
+STEP 4 (Flow/Spirit Coach): On **every training day**, schedule spirit/flow active recovery after combat — full \`sequence\` arrays targeting taxed recovery zones.
 
 Constraint: Valid JSON with complete arrays per training day — never a single exercise, round, or pose.
+
+CRITICAL HYPERTROPHY RULE: When the user's Iron goal is Hypertrophy (or Powerbuilding), each iron training day MUST contain **6 to 8 exercises**. Do NOT prescribe minimalist 4-exercise sessions. If \`available_time_iron\` is tight, prescribe **SUPERSETS** (pair antagonists or non-competing movements) to fit volume into the time budget. Exercise \`title\` / names must be clean catalog names — no numeric prefixes like "1." or "A1".
+
+TIME BUDGET LAW (mandatory — scale volume to fit real session length):
+- Iron available_time: ${pillarTime.available_time_iron} minutes → prescribe ~${ironTarget} exercises on each Iron day${hypertrophyAthlete ? ' (hypertrophy minimum 6 — use supersets if time-constrained)' : ''}. Include warm-up accessories only if time allows.
+- Combat available_time: ${pillarTime.available_time_combat} minutes → prescribe ~${combatRounds} rounds (adjust work/rest seconds so total fits).
+- Spirit available_time: ${pillarTime.available_time_spirit} minutes → spirit block duration_minutes MUST NOT exceed this budget.
+- Each iron exercise needs default_sets × (work + rest) to fit inside the iron day budget — reduce sets before dropping below minimum exercise count.
 
 CHAIN-OF-THOUGHT RULE: Execute STEPS 1 → 4 internally for all 7 days. Do NOT output reasoning — return ONLY the final JSON object.
 
@@ -590,6 +836,9 @@ OUTPUT SCHEMA:
 {
   "week_start_date": "YYYY-MM-DD (Monday of this plan)",
   "training_days_per_week": ${trainingDaysPerWeek},
+  "frequency_iron": ${pillarFreq.frequency_iron},
+  "frequency_combat": ${pillarFreq.frequency_combat},
+  "frequency_spirit": ${pillarFreq.frequency_spirit},
   "microcycle": [
     {
       "day_index": 1,
@@ -620,7 +869,7 @@ MESOCYCLE (21-day window — iron_expert.mesocycle):
 - Compute target_weight_kg from Epley E1RM: 1RM = weight × (1 + reps / 30). Hypertrophy goal → 70–80% 1RM; Strength goal → 85%+ 1RM.
 - If athlete hit prescribed reps with RPE ≤ 8 across recent sessions for an exercise_id → MUST progress: +2.5% load OR +1 rep on the top of the rep range (state which in progression_note).
 - If RPE ≥ 9 or failed rep targets → deload ~5% load OR reduce target_rir to 3–4, sets −1.
-- If no logs in 3 weeks → use catalog defaults with target_rep_range "8-12 @ 2 RIR" and estimate load from body mass.
+- If no logs in 3 weeks → target_weight_kg MUST be null. progression_note: "Calibrate first set @ prescribed RIR". NEVER estimate load from body mass or flat defaults.
 
 RIR (Reps in Reserve) — mandatory:
 - Always set target_rep_range as a STRING like "8-10 @ 2 RIR" or "12-15 @ 1 RIR".
@@ -682,9 +931,9 @@ STEP 4 — FLOW / SPIRIT COACH (apply after Steps 2 and 3):
 - prescribed_reason must cite Iron + Combat load from Steps 2–3 (e.g. "Hip & lumbar restore — heavy hinge + boxing volume in 48h").
 
 DAY STRUCTURE:
-- 2–4 blocks, order starting at 0.
-- Balance pillars using focus_preference weights (highest weight = main ritual block).
-- At most one iron block, one combat block; spirit blocks use pillar "spirit".`;
+- 2–4 blocks per training day, order starting at 0.
+- Hybrid training days: iron block (order 0) → combat block (order 1) → spirit block (order 2).
+- Balance pillar emphasis using focus_preference weights within each block's volume.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -692,7 +941,7 @@ DAY STRUCTURE:
 // ---------------------------------------------------------------------------
 
 const LIBRARY_EXERCISE_SELECT =
-  'id, slug, name, equipment_required, default_sets, default_reps, movement_pattern, primary_muscle, synergist_muscles, cns_fatigue_cost, joint_stress_profile, stretch_mediated_hypertrophy, biomechanical_instructions';
+  'id, slug, name, equipment_required, default_sets, default_reps, movement_pattern, primary_muscle, synergist_muscles, cns_fatigue_cost, joint_stress_profile, stretch_mediated_hypertrophy';
 
 function mapLibraryExerciseRow(row: Record<string, unknown>): LibraryExercise {
   const synergists = Array.isArray(row.synergist_muscles)
@@ -976,8 +1225,11 @@ function detectIronAutoregulation(
   yesterdayMainRpe: number | null,
 ): IronAutoregulationState {
   const stress = biological.baseline_stress_level;
+  const cnsFatigue = biological.cns_fatigue_score ?? 0;
+  const highCnsFatigue = cnsFatigue >= CNS_FATIGUE_AUTOREG_THRESHOLD;
   const highStress = stress != null && stress > 7;
   const poorRecovery =
+    highCnsFatigue ||
     highStress ||
     (yesterdayMainRpe != null && yesterdayMainRpe >= 8) ||
     (stress != null && stress >= 7 && yesterdayMainRpe != null && yesterdayMainRpe >= 7);
@@ -1122,7 +1374,7 @@ function prescribeIronExercise(
   if (progression === 'deload') targetRir = 4;
 
   let targetReps = meta?.default_reps ?? 10;
-  let targetWeight: number | null = last?.weight_used ?? null;
+  let targetWeight: number | null = null;
   let note = mesocycle?.notes ?? 'Baseline prescription';
 
   const e1rm = estimateBestE1RMFromLogs(ironLogs3w, exerciseId);
@@ -1132,11 +1384,11 @@ function prescribeIronExercise(
       targetWeight = e1rmTarget;
       note = `E1RM ${e1rm} kg (Epley, 21d) · ${resolveIronGoalLabel(goalIron)} load`;
     }
-  }
-
-  if (targetWeight == null && baselineWeightKg != null) {
-    targetWeight = Math.round(baselineWeightKg * 0.35 * 10) / 10;
-    note = `Estimated from ${baselineWeightKg} kg body mass`;
+  } else if (last?.weight_used != null && last.weight_used > 0) {
+    targetWeight = Math.round(last.weight_used * 10) / 10;
+    note = `Last logged ${targetWeight} kg — calibrate @ ${targetRir} RIR`;
+  } else {
+    note = 'Calibrate first set — no performance history for this movement';
   }
 
   if (last?.weight_used != null && last.rpe_score != null) {
@@ -1383,12 +1635,30 @@ function buildDeterministicIronBlock(
   autoreg: IronAutoregulationState,
   equipment: string[],
   goalIron: string | null,
+  pillarTime: PillarTimeBudget,
+  focusLabel: string,
+  mesocycleWeek = 1,
 ): GameplanBlockPayload {
-  const mesocycle = buildMesocycleSummaries(routineIds, catalog, ironLogs3w);
+  const isDeload = isDeloadMesocycleWeek(mesocycleWeek);
+  let targetCount = targetIronExerciseCount(pillarTime.available_time_iron, goalIron);
+  if (isDeload) targetCount = Math.min(targetCount, 4);
+
+  let scaledRoutineIds = selectExercisesByIronBlueprint(
+    focusLabel,
+    catalog,
+    equipment,
+    targetCount,
+    autoreg.blocked_joint_profiles,
+  );
+  if (scaledRoutineIds.length < Math.min(targetCount, 4)) {
+    scaledRoutineIds = expandRoutineIdsForTime(routineIds, catalog, targetCount);
+  }
+  scaledRoutineIds = capIronExercisesForDeload(scaledRoutineIds, isDeload);
+  const mesocycle = buildMesocycleSummaries(scaledRoutineIds, catalog, ironLogs3w);
   const mesocycleById = new Map(mesocycle.map((row) => [row.exercise_id, row]));
   const weeklyVolume = buildWeeklyVolumeByMuscle(catalog, ironLogs7d);
 
-  const exercises: IronExercisePrescription[] = routineIds.map((exerciseId) =>
+  let exercises: IronExercisePrescription[] = scaledRoutineIds.map((exerciseId) =>
     prescribeIronExercise(
       exerciseId,
       catalog,
@@ -1401,8 +1671,11 @@ function buildDeterministicIronBlock(
       goalIron,
     ),
   );
+  if (isDeload) {
+    exercises = exercises.map((row) => applyDeloadToIronExercise(row));
+  }
 
-  const names = routineIds
+  const names = scaledRoutineIds
     .map((id) => catalog.find((row) => row.id === id)?.name)
     .filter(Boolean)
     .join(' · ');
@@ -1412,7 +1685,7 @@ function buildDeterministicIronBlock(
     pillar: 'iron',
     title: 'Main Ritual: Iron',
     subtitle: names || 'Iron routine',
-    duration_minutes: 45,
+    duration_minutes: pillarTime.available_time_iron,
     order: 1,
     iron: { routine_id: routineId, exercises },
   };
@@ -1532,6 +1805,7 @@ function buildDeterministicCombatBlock(
   mastery: number,
   yesterdayMainRpe: number | null,
   baselineStress: number | null,
+  pillarTime: PillarTimeBudget,
 ): GameplanBlockPayload | null {
   if (combos.length === 0) return null;
 
@@ -1543,7 +1817,20 @@ function buildDeterministicCombatBlock(
     (yesterdayMainRpe != null && yesterdayMainRpe >= 8) ||
     (baselineStress != null && baselineStress >= 7);
 
-  const rounds_structure = buildTacticalRoundPlan(highFatigue);
+  let rounds_structure = buildTacticalRoundPlan(highFatigue);
+  const maxRounds = targetCombatRoundCount(pillarTime.available_time_combat);
+  const totalPlannedRounds = rounds_structure.reduce(
+    (sum, segment) => sum + (segment.round_end - segment.round_start + 1),
+    0,
+  );
+  if (totalPlannedRounds > maxRounds) {
+    rounds_structure = rounds_structure.slice(0, maxRounds).map((segment, index) => ({
+      ...segment,
+      round_start: index + 1,
+      round_end: index + 1,
+    }));
+  }
+
   const rounds: CombatRoundPrescription[] = [];
 
   for (const segment of rounds_structure) {
@@ -1575,7 +1862,7 @@ function buildDeterministicCombatBlock(
     pillar: 'combat',
     title: 'Main Ritual: Blood & Bone',
     subtitle: structureLabel,
-    duration_minutes: highFatigue ? 32 : 40,
+    duration_minutes: pillarTime.available_time_combat,
     order: 1,
     combat: { rounds_structure, rounds },
   };
@@ -1785,9 +2072,16 @@ function buildFlowBlockFromHealer(
   order: number,
   id: string,
   title: string,
+  options?: { prerequisiteSlugs?: string[]; mesocycleWeek?: number; spiritMinutesCap?: number },
 ): GameplanBlockPayload | null {
   const pool = filterFlowCatalogForHealer(flowCatalog, healer, allowedFlowIds);
   if (pool.length === 0) return null;
+
+  const isDeload = isDeloadMesocycleWeek(options?.mesocycleWeek ?? 1);
+  const spiritCap = scaleSpiritMinutesForDeload(
+    options?.spiritMinutesCap ?? 25,
+    isDeload,
+  );
 
   const targetCount = yesterdayRpe != null && yesterdayRpe >= 8 ? 7 : 5;
   const picks: LibraryFlowSpiritRow[] = [];
@@ -1795,11 +2089,11 @@ function buildFlowBlockFromHealer(
     picks.push(pool[i % pool.length]!);
   }
 
-  const asanas: FlowAsanaPrescription[] = picks.map((row, index) => ({
+  const flowAsanas: FlowAsanaPrescription[] = picks.map((row) => ({
     asana_id: row.id,
     slug: row.slug,
     name: row.session_name,
-    order: index + 1,
+    order: 0,
     hold_seconds: row.is_dynamic_flow
       ? Math.max(30, Math.round(row.default_hold_seconds || 30))
       : row.default_hold_seconds || 45,
@@ -1807,10 +2101,16 @@ function buildFlowBlockFromHealer(
     is_dynamic_flow: row.is_dynamic_flow,
   }));
 
+  const asanas = prependBiomechanicalAsanas(
+    flowAsanas,
+    flowCatalog,
+    options?.prerequisiteSlugs ?? [],
+  ).map((row, index) => ({ ...row, order: index + 1 }));
+
   const holdTotalSec = asanas.reduce((sum, row) => sum + row.hold_seconds, 0);
   const durationMinutes = Math.max(
     10,
-    Math.min(25, Math.round(holdTotalSec / 60) + Math.ceil(asanas.length * 0.5)),
+    Math.min(spiritCap, Math.round(holdTotalSec / 60) + Math.ceil(asanas.length * 0.5)),
   );
 
   const zoneLabel = healer.required_recovery_zones.slice(0, 2).join(' · ');
@@ -2153,6 +2453,8 @@ function buildExpertContext(
   equipment: string[],
   pillarGoals: PillarGoals,
   trainingDaysPerWeek: number,
+  pillarFreq: PillarFrequency,
+  pillarTime: PillarTimeBudget,
   catalog: LibraryExercise[],
   routineIds: string[],
   comboCatalog: LibraryCombo[],
@@ -2193,8 +2495,22 @@ function buildExpertContext(
     pillar_goals: pillarGoals,
     microcycle_planning: {
       training_days_per_week: trainingDaysPerWeek,
+      frequency_iron: pillarFreq.frequency_iron,
+      frequency_combat: pillarFreq.frequency_combat,
+      frequency_spirit: pillarFreq.frequency_spirit,
+      iron_day_indices: spreadPillarDayIndices(pillarFreq.frequency_iron),
+      combat_day_indices: spreadPillarDayIndices(pillarFreq.frequency_combat),
+      spirit_day_indices: spreadPillarDayIndices(pillarFreq.frequency_spirit),
       calendar_days: 7,
       day_index_legend: '1=Monday through 7=Sunday',
+      available_time_iron: pillarTime.available_time_iron,
+      available_time_combat: pillarTime.available_time_combat,
+      available_time_spirit: pillarTime.available_time_spirit,
+      target_iron_exercises: targetIronExerciseCount(
+        pillarTime.available_time_iron,
+        pillarGoals.goal_iron,
+      ),
+      target_combat_rounds: targetCombatRoundCount(pillarTime.available_time_combat),
     },
     iron_expert: {
       routine_id: 'iron_routine_a',
@@ -2306,11 +2622,45 @@ function countActiveTrainingDays(microcycle: MicrocycleDayPayload[]): number {
 
 function isDegenerateMicrocyclePayload(
   microcycle: MicrocycleDayPayload[],
-  trainingDaysPerWeek: number,
+  pillarFreq: PillarFrequency,
 ): boolean {
+  const expectedActive = deriveActiveTrainingDays(pillarFreq);
   const active = countActiveTrainingDays(microcycle);
-  const expected = clampTrainingDaysPerWeek(trainingDaysPerWeek);
-  return active === 0 || active < expected;
+  const ironCount = countPillarBlocks(microcycle, 'iron');
+  const combatCount = countPillarBlocks(microcycle, 'combat');
+  const spiritCount = countPillarBlocks(microcycle, 'spirit');
+
+  if (expectedActive === 0) {
+    return ironCount > 0 || combatCount > 0 || spiritCount > 0;
+  }
+
+  if (active === 0) return true;
+
+  if (pillarFreq.frequency_iron > 0 && ironCount < pillarFreq.frequency_iron) return true;
+  if (pillarFreq.frequency_combat > 0 && combatCount < pillarFreq.frequency_combat) return true;
+  if (pillarFreq.frequency_spirit > 0 && spiritCount < pillarFreq.frequency_spirit) return true;
+
+  return false;
+}
+
+function padMicrocycleToSevenDays(days: MicrocycleDayPayload[]): MicrocycleDayPayload[] {
+  const byIndex = new Map(
+    days
+      .filter((day) => day.day_index >= 1 && day.day_index <= 7)
+      .map((day) => [day.day_index, day]),
+  );
+
+  return Array.from({ length: 7 }, (_, index) => {
+    const day_index = index + 1;
+    return (
+      byIndex.get(day_index) ?? {
+        day_index,
+        is_rest_day: true,
+        focus_label: 'Rest & Recovery',
+        blocks: [],
+      }
+    );
+  });
 }
 
 function normalizeMicrocyclePayload(
@@ -2372,6 +2722,391 @@ function normalizeMicrocyclePayload(
   });
 }
 
+function buildHybridTrainingDayBlocks(
+  dayIndex: number,
+  focus: FocusPreference,
+  catalog: LibraryExercise[],
+  routineIds: string[],
+  ironLogs3w: PerformanceLogRow[],
+  ironLogs7d: PerformanceLogRow[],
+  autoreg: IronAutoregulationState,
+  equipment: string[],
+  comboCatalog: LibraryCombo[],
+  allowedComboIds: string[],
+  combatMastery: number,
+  yesterdayRpe: number | null,
+  biological: BiologicalPassport,
+  flowCatalog: LibraryFlowSpiritRow[],
+  allowedFlowIds: string[],
+  healer: HealerRecoveryState,
+  goalIron: string | null,
+  pillarTime: PillarTimeBudget,
+): GameplanBlockPayload[] {
+  const blocks: GameplanBlockPayload[] = [];
+  let order = 0;
+  const stressRpe =
+    yesterdayRpe ??
+    (biological.baseline_stress_level != null ? biological.baseline_stress_level + 2 : null);
+
+  if (routineIds.length > 0) {
+    const iron = buildDeterministicIronBlock(
+      `iron_routine_d${dayIndex}`,
+      catalog,
+      routineIds,
+      ironLogs3w,
+      ironLogs7d,
+      null,
+      autoreg,
+      equipment,
+      goalIron,
+      pillarTime,
+      'Iron: Full Body',
+    );
+    iron.id = `block-d${dayIndex}-iron`;
+    iron.title = 'Main Ritual: Iron';
+    iron.order = order++;
+    blocks.push(iron);
+  }
+
+  const combat = buildDeterministicCombatBlock(
+    comboCatalog.filter((combo) => allowedComboIds.includes(combo.id)),
+    combatMastery,
+    yesterdayRpe,
+    biological.baseline_stress_level,
+    pillarTime,
+  );
+  if (combat) {
+    combat.id = `block-d${dayIndex}-combat`;
+    combat.title = 'Blood & Bone · HIIT Finisher';
+    combat.subtitle = 'Post-iron conditioning';
+    combat.duration_minutes = Math.min(pillarTime.available_time_combat, 25);
+    combat.order = order++;
+    blocks.push(combat);
+  }
+
+  const spirit =
+    buildFlowBlockFromHealer(
+      flowCatalog,
+      allowedFlowIds,
+      healer,
+      stressRpe,
+      order,
+      `block-d${dayIndex}-spirit`,
+      'Sanctuary · Active Recovery',
+    ) ??
+    buildSpiritBlockFromRpe(
+      stressRpe,
+      order,
+      `block-d${dayIndex}-spirit`,
+      'Sanctuary · Active Recovery',
+    );
+  spirit.duration_minutes = Math.min(pillarTime.available_time_spirit, 20);
+  spirit.order = order++;
+  blocks.push(spirit);
+
+  if (blocks.length > 0) return blocks;
+
+  return buildFallbackProtocol(
+    focus,
+    catalog,
+    routineIds,
+    ironLogs3w,
+    ironLogs7d,
+    autoreg,
+    equipment,
+    comboCatalog,
+    allowedComboIds,
+    combatMastery,
+    yesterdayRpe,
+    biological,
+    flowCatalog,
+    allowedFlowIds,
+    healer,
+    goalIron,
+    pillarTime,
+  );
+}
+
+function reconcileIronTargetWeightsInMicrocycle(
+  microcycle: MicrocycleDayPayload[],
+  ironLogs3w: PerformanceLogRow[],
+  goalIron: string | null,
+): MicrocycleDayPayload[] {
+  return microcycle.map((day) => ({
+    ...day,
+    blocks: day.blocks.map((block) => {
+      if (!block.iron?.exercises?.length) return block;
+      return {
+        ...block,
+        iron: {
+          ...block.iron,
+          exercises: block.iron.exercises.map((exercise) => {
+            const resolved = resolvePrescriptionTargetWeight(
+              exercise.exercise_id,
+              exercise.target_weight_kg,
+              ironLogs3w,
+              goalIron,
+              exercise.target_reps,
+              exercise.target_rir ?? 2,
+            );
+            const calibrating = resolved == null;
+            return {
+              ...exercise,
+              target_weight_kg: resolved,
+              progression_note: calibrating
+                ? [
+                    exercise.progression_note,
+                    'Calibrate first set @ prescribed RIR',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')
+                : exercise.progression_note,
+            };
+          }),
+        },
+      };
+    }),
+  }));
+}
+
+function enforceGranularPillarSchedule(
+  microcycle: MicrocycleDayPayload[],
+  pillarFreq: PillarFrequency,
+  catalog: LibraryExercise[],
+  routineIds: string[],
+  ironLogs3w: PerformanceLogRow[],
+  ironLogs7d: PerformanceLogRow[],
+  autoreg: IronAutoregulationState,
+  equipment: string[],
+  comboCatalog: LibraryCombo[],
+  allowedComboIds: string[],
+  combatMastery: number,
+  yesterdayRpe: number | null,
+  biological: BiologicalPassport,
+  flowCatalog: LibraryFlowSpiritRow[],
+  allowedFlowIds: string[],
+  healer: HealerRecoveryState,
+  goalIron: string | null,
+  pillarTime: PillarTimeBudget,
+  trainingDaysPerWeek: number,
+  mesocycleWeek = 1,
+): MicrocycleDayPayload[] {
+  const ironDays = new Set(spreadPillarDayIndices(pillarFreq.frequency_iron));
+  const combatDays = new Set(spreadPillarDayIndices(pillarFreq.frequency_combat));
+  const spiritDays = new Set(spreadPillarDayIndices(pillarFreq.frequency_spirit));
+  const byIndex = new Map(
+    microcycle
+      .filter((day) => day.day_index >= 1 && day.day_index <= 7)
+      .map((day) => [day.day_index, day]),
+  );
+
+  let ironSlot = 0;
+
+  return Array.from({ length: 7 }, (_, index) => {
+    const day_index = index + 1;
+    const existing = byIndex.get(day_index);
+    const wantsIron = ironDays.has(day_index);
+    const wantsCombat = combatDays.has(day_index);
+    const wantsSpirit = spiritDays.has(day_index);
+    const active = wantsIron || wantsCombat || wantsSpirit;
+
+    if (!active) {
+      return {
+        day_index,
+        is_rest_day: true,
+        focus_label: 'Rest & Recovery',
+        blocks: [],
+      };
+    }
+
+    let blocks = [...(existing?.blocks ?? [])].filter((block) => {
+      if (block.pillar === 'iron') return wantsIron;
+      if (block.pillar === 'combat') return wantsCombat;
+      if (block.pillar === 'spirit') return wantsSpirit;
+      return false;
+    });
+
+    let order = blocks.reduce((max, block) => Math.max(max, block.order ?? 0), -1) + 1;
+    const stressRpe =
+      yesterdayRpe ??
+      (biological.baseline_stress_level != null ? biological.baseline_stress_level + 2 : null);
+
+    let injectedIron: GameplanBlockPayload | null =
+      blocks.find((block) => block.pillar === 'iron') ?? null;
+
+    if (wantsIron && !blocks.some((block) => block.pillar === 'iron') && routineIds.length > 0) {
+      const ironFocus = focusLabelForTrainingSlot(trainingDaysPerWeek, ironSlot++);
+      const iron = buildDeterministicIronBlock(
+        `iron_routine_d${day_index}`,
+        catalog,
+        routineIds,
+        ironLogs3w,
+        ironLogs7d,
+        null,
+        autoreg,
+        equipment,
+        goalIron,
+        pillarTime,
+        ironFocus,
+        mesocycleWeek,
+      );
+      iron.id = `block-d${day_index}-iron`;
+      iron.title = ironFocus;
+      iron.order = order++;
+      blocks.push(iron);
+      injectedIron = iron;
+    } else if (wantsIron) {
+      ironSlot += 1;
+    }
+
+    if (wantsCombat && !blocks.some((block) => block.pillar === 'combat')) {
+      const combat = buildDeterministicCombatBlock(
+        comboCatalog.filter((combo) => allowedComboIds.includes(combo.id)),
+        combatMastery,
+        yesterdayRpe,
+        biological.baseline_stress_level,
+        pillarTime,
+      );
+      if (combat) {
+        combat.id = `block-d${day_index}-combat`;
+        combat.title = 'Blood & Bone · HIIT Finisher';
+        combat.subtitle = 'Post-iron conditioning';
+        combat.duration_minutes = Math.min(pillarTime.available_time_combat, 25);
+        combat.order = order++;
+        blocks.push(combat);
+      }
+    }
+
+    if (wantsSpirit && !blocks.some((block) => block.pillar === 'spirit')) {
+      const ironNames =
+        injectedIron?.iron?.exercises
+          ?.map((row) => catalog.find((ex) => ex.id === row.exercise_id)?.name)
+          .filter((name): name is string => Boolean(name)) ?? [];
+      const prerequisiteSlugs = resolveBiomechanicalPrerequisiteSlugs(ironNames);
+
+      const spirit =
+        buildFlowBlockFromHealer(
+          flowCatalog,
+          allowedFlowIds,
+          healer,
+          stressRpe,
+          order,
+          `block-d${day_index}-spirit`,
+          'Sanctuary · Active Recovery',
+          {
+            prerequisiteSlugs,
+            mesocycleWeek,
+            spiritMinutesCap: pillarTime.available_time_spirit,
+          },
+        ) ??
+        buildSpiritBlockFromRpe(
+          stressRpe,
+          order,
+          `block-d${day_index}-spirit`,
+          'Sanctuary · Active Recovery',
+        );
+      spirit.duration_minutes = Math.min(pillarTime.available_time_spirit, 20);
+      spirit.order = order++;
+      blocks.push(spirit);
+    }
+
+    blocks = blocks.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+    const pillarLabels: string[] = [];
+    if (wantsIron) pillarLabels.push('Iron');
+    if (wantsCombat) pillarLabels.push('Combat');
+    if (wantsSpirit) pillarLabels.push('Spirit');
+    const focus_label =
+      existing?.focus_label && !existing.focus_label.includes('Rest')
+        ? existing.focus_label
+        : `Hybrid: ${pillarLabels.join(' + ')}`;
+
+    return {
+      day_index,
+      is_rest_day: false,
+      focus_label,
+      blocks,
+    };
+  });
+}
+
+function enforceTriPillarHybridDays(
+  microcycle: MicrocycleDayPayload[],
+  comboCatalog: LibraryCombo[],
+  allowedComboIds: string[],
+  combatMastery: number,
+  yesterdayRpe: number | null,
+  biological: BiologicalPassport,
+  flowCatalog: LibraryFlowSpiritRow[],
+  allowedFlowIds: string[],
+  healer: HealerRecoveryState,
+  pillarTime: PillarTimeBudget,
+): MicrocycleDayPayload[] {
+  return microcycle.map((day) => {
+    if (day.is_rest_day) return day;
+
+    const blocks = [...day.blocks];
+    const hasIron = blocks.some((block) => block.pillar === 'iron');
+    const hasCombat = blocks.some((block) => block.pillar === 'combat');
+    const hasSpirit = blocks.some((block) => block.pillar === 'spirit');
+    let order =
+      blocks.reduce((max, block) => Math.max(max, block.order ?? 0), -1) + 1;
+    const stressRpe =
+      yesterdayRpe ??
+      (biological.baseline_stress_level != null ? biological.baseline_stress_level + 2 : null);
+
+    if (hasIron && !hasCombat) {
+      const combat = buildDeterministicCombatBlock(
+        comboCatalog.filter((combo) => allowedComboIds.includes(combo.id)),
+        combatMastery,
+        yesterdayRpe,
+        biological.baseline_stress_level,
+        pillarTime,
+      );
+      if (combat) {
+        combat.id = `block-d${day.day_index}-combat-hybrid`;
+        combat.title = 'Blood & Bone · HIIT Finisher';
+        combat.subtitle = 'Post-iron conditioning';
+        combat.duration_minutes = Math.min(pillarTime.available_time_combat, 25);
+        combat.order = order++;
+        blocks.push(combat);
+      }
+    }
+
+    if ((hasIron || hasCombat) && !hasSpirit) {
+      const spirit =
+        buildFlowBlockFromHealer(
+          flowCatalog,
+          allowedFlowIds,
+          healer,
+          stressRpe,
+          order,
+          `block-d${day.day_index}-spirit-hybrid`,
+          'Sanctuary · Active Recovery',
+        ) ??
+        buildSpiritBlockFromRpe(
+          stressRpe,
+          order,
+          `block-d${day.day_index}-spirit-hybrid`,
+          'Sanctuary · Active Recovery',
+        );
+      spirit.duration_minutes = Math.min(pillarTime.available_time_spirit, 20);
+      spirit.order = order++;
+      blocks.push(spirit);
+    }
+
+    const focusLabel = day.focus_label.toLowerCase().includes('hybrid')
+      ? day.focus_label
+      : `Hybrid: ${day.focus_label} + Combat + Spirit`;
+
+    return {
+      ...day,
+      focus_label: focusLabel,
+      blocks,
+    };
+  });
+}
+
 function buildBlocksForFocusLabel(
   focusLabel: string,
   focus: FocusPreference,
@@ -2391,6 +3126,7 @@ function buildBlocksForFocusLabel(
   healer: HealerRecoveryState,
   dayIndex: number,
   goalIron: string | null,
+  pillarTime: PillarTimeBudget,
 ): GameplanBlockPayload[] {
   const lower = focusLabel.toLowerCase();
   const blocks: GameplanBlockPayload[] = [];
@@ -2422,10 +3158,12 @@ function buildBlocksForFocusLabel(
       routineIds,
       ironLogs3w,
       ironLogs7d,
-      biological.weight_kg,
+      null,
       autoreg,
       equipment,
       goalIron,
+      pillarTime,
+      focusLabel,
     );
     iron.id = `block-d${dayIndex}-iron`;
     iron.title = focusLabel;
@@ -2439,6 +3177,7 @@ function buildBlocksForFocusLabel(
       combatMastery,
       yesterdayRpe,
       biological.baseline_stress_level,
+      pillarTime,
     );
     if (combat) {
       combat.id = `block-d${dayIndex}-combat`;
@@ -2482,10 +3221,12 @@ function buildBlocksForFocusLabel(
     allowedFlowIds,
     healer,
     goalIron,
+    pillarTime,
   );
 }
 
 function buildDeterministicMicrocycle(
+  pillarFreq: PillarFrequency,
   trainingDaysPerWeek: number,
   focus: FocusPreference,
   catalog: LibraryExercise[],
@@ -2503,43 +3244,113 @@ function buildDeterministicMicrocycle(
   allowedFlowIds: string[],
   healer: HealerRecoveryState,
   goalIron: string | null,
+  pillarTime: PillarTimeBudget,
+  mesocycleWeek = 1,
 ): MicrocycleDayPayload[] {
-  const trainingIndices = spreadTrainingDayIndices(trainingDaysPerWeek);
-  const trainingSet = new Set(trainingIndices);
-  let trainingSlot = 0;
+  const ironDays = new Set(spreadPillarDayIndices(pillarFreq.frequency_iron));
+  const combatDays = new Set(spreadPillarDayIndices(pillarFreq.frequency_combat));
+  const spiritDays = new Set(spreadPillarDayIndices(pillarFreq.frequency_spirit));
+  let ironSlot = 0;
 
-  return Array.from({ length: 7 }, (_, index) => {
+  const draft = Array.from({ length: 7 }, (_, index) => {
     const day_index = index + 1;
-    if (!trainingSet.has(day_index)) {
+    const active =
+      ironDays.has(day_index) || combatDays.has(day_index) || spiritDays.has(day_index);
+
+    if (!active) {
       return {
         day_index,
         is_rest_day: true,
         focus_label: 'Rest & Recovery',
-        blocks: [],
+        blocks: [] as GameplanBlockPayload[],
       };
     }
 
-    const focus_label = focusLabelForTrainingSlot(trainingDaysPerWeek, trainingSlot++);
-    const blocks = buildBlocksForFocusLabel(
-      focus_label,
-      focus,
-      catalog,
-      routineIds,
-      ironLogs3w,
-      ironLogs7d,
-      autoreg,
-      equipment,
-      comboCatalog,
-      allowedComboIds,
-      combatMastery,
-      yesterdayRpe,
-      biological,
-      flowCatalog,
-      allowedFlowIds,
-      healer,
-      day_index,
-      goalIron,
-    );
+    const focus_label = ironDays.has(day_index)
+      ? `Hybrid: ${focusLabelForTrainingSlot(trainingDaysPerWeek, ironSlot++)}`
+      : `Hybrid: ${[
+          combatDays.has(day_index) ? 'Combat' : null,
+          spiritDays.has(day_index) ? 'Spirit' : null,
+        ]
+          .filter(Boolean)
+          .join(' + ')}`;
+
+    const blocks: GameplanBlockPayload[] = [];
+    let order = 0;
+    const stressRpe =
+      yesterdayRpe ??
+      (biological.baseline_stress_level != null ? biological.baseline_stress_level + 2 : null);
+
+    let ironBlock: GameplanBlockPayload | null = null;
+
+    if (ironDays.has(day_index) && routineIds.length > 0) {
+      ironBlock = buildDeterministicIronBlock(
+        `iron_routine_d${day_index}`,
+        catalog,
+        routineIds,
+        ironLogs3w,
+        ironLogs7d,
+        null,
+        autoreg,
+        equipment,
+        goalIron,
+        pillarTime,
+        focus_label,
+        mesocycleWeek,
+      );
+      ironBlock.id = `block-d${day_index}-iron`;
+      ironBlock.title = focus_label;
+      ironBlock.order = order++;
+      blocks.push(ironBlock);
+    }
+
+    if (combatDays.has(day_index)) {
+      const combat = buildDeterministicCombatBlock(
+        comboCatalog.filter((combo) => allowedComboIds.includes(combo.id)),
+        combatMastery,
+        yesterdayRpe,
+        biological.baseline_stress_level,
+        pillarTime,
+      );
+      if (combat) {
+        combat.id = `block-d${day_index}-combat`;
+        combat.title = 'Blood & Bone · HIIT Finisher';
+        combat.order = order++;
+        blocks.push(combat);
+      }
+    }
+
+    if (spiritDays.has(day_index)) {
+      const ironNames =
+        ironBlock?.iron?.exercises
+          ?.map((row) => catalog.find((ex) => ex.id === row.exercise_id)?.name)
+          .filter((name): name is string => Boolean(name)) ?? [];
+      const prerequisiteSlugs = resolveBiomechanicalPrerequisiteSlugs(ironNames);
+
+      const spirit =
+        buildFlowBlockFromHealer(
+          flowCatalog,
+          allowedFlowIds,
+          healer,
+          stressRpe,
+          order,
+          `block-d${day_index}-spirit`,
+          'Sanctuary · Active Recovery',
+          {
+            prerequisiteSlugs,
+            mesocycleWeek,
+            spiritMinutesCap: pillarTime.available_time_spirit,
+          },
+        ) ??
+        buildSpiritBlockFromRpe(
+          stressRpe,
+          order,
+          `block-d${day_index}-spirit`,
+          'Sanctuary · Active Recovery',
+        );
+      spirit.order = order++;
+      blocks.push(spirit);
+    }
 
     return {
       day_index,
@@ -2548,6 +3359,29 @@ function buildDeterministicMicrocycle(
       blocks,
     };
   });
+
+  return enforceGranularPillarSchedule(
+    draft,
+    pillarFreq,
+    catalog,
+    routineIds,
+    ironLogs3w,
+    ironLogs7d,
+    autoreg,
+    equipment,
+    comboCatalog,
+    allowedComboIds,
+    combatMastery,
+    yesterdayRpe,
+    biological,
+    flowCatalog,
+    allowedFlowIds,
+    healer,
+    goalIron,
+    pillarTime,
+    trainingDaysPerWeek,
+    mesocycleWeek,
+  );
 }
 
 function sanitizeMicrocycle(
@@ -2611,7 +3445,7 @@ function sanitizeMicrocycle(
     ];
   });
 
-  return normalizeMicrocyclePayload(sanitizedDays, trainingDaysPerWeek);
+  return padMicrocycleToSevenDays(sanitizedDays);
 }
 
 function buildFallbackProtocol(
@@ -2631,6 +3465,7 @@ function buildFallbackProtocol(
   allowedFlowIds: string[],
   healer: HealerRecoveryState,
   goalIron: string | null,
+  pillarTime: PillarTimeBudget,
 ): GameplanBlockPayload[] {
   const ranked = [
     { pillar: 'iron' as const, weight: focus.iron },
@@ -2667,10 +3502,12 @@ function buildFallbackProtocol(
       routineIds,
       ironLogs3w,
       ironLogs7d,
-      biological.weight_kg,
+      null,
       autoreg,
       equipment,
       goalIron,
+      pillarTime,
+      'Iron: Full Body',
     );
     iron.order = order++;
     blocks.push(iron);
@@ -2680,6 +3517,7 @@ function buildFallbackProtocol(
       combatMastery,
       yesterdayRpe,
       biological.baseline_stress_level,
+      pillarTime,
     );
     if (combat) {
       combat.order = order++;
@@ -2716,8 +3554,6 @@ export async function handleHeadCoachRequest(req: Request): Promise<Response> {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
-    const openRouterKey = Deno.env.get('OPENROUTER_API_KEY');
-
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) {
       return jsonResponse({ error: 'Missing authorization' }, 401);
@@ -2738,13 +3574,13 @@ export async function handleHeadCoachRequest(req: Request): Promise<Response> {
 
     console.log('[generate_daily_protocol] Handler start', { user_id: user.id });
 
-    const body = await req.json();
-    const focus_preference: FocusPreference = body.focus_preference;
+    const body = (await req.json()) as Record<string, unknown>;
+    const focus_preference = body.focus_preference as FocusPreference;
 
     const catalogAssets = await fetchMandatoryCatalogAssets(
       supabase,
       user.id,
-      body.available_equipment,
+      body.available_equipment as string[] | undefined,
     );
 
     const available_equipment = catalogAssets.available_equipment;
@@ -2811,7 +3647,7 @@ export async function handleHeadCoachRequest(req: Request): Promise<Response> {
       supabase
         .from('profiles')
         .select(
-          'focus_preference, date_of_birth, weight_kg, height_cm, body_fat_percentage, current_injuries, baseline_stress_level, training_days_per_week, goal_iron, goal_combat, goal_flow, goal_spirit',
+          'focus_preference, date_of_birth, weight_kg, height_cm, body_fat_percentage, current_injuries, baseline_stress_level, training_days_per_week, goal_iron, goal_combat, goal_flow, goal_spirit, available_time_iron, available_time_combat, available_time_spirit, frequency_iron, frequency_combat, frequency_spirit, mesocycle_week, cns_fatigue_score',
         )
         .eq('id', user.id)
         .maybeSingle(),
@@ -2826,7 +3662,7 @@ export async function handleHeadCoachRequest(req: Request): Promise<Response> {
         .eq('user_id', user.id)
         .gte('timestamp', mesocycleCutoffIso)
         .order('timestamp', { ascending: false })
-        .limit(200),
+        .limit(PERFORMANCE_LOGS_QUERY_LIMIT),
       supabase
         .from('daily_protocols')
         .select('blocks')
@@ -2839,11 +3675,18 @@ export async function handleHeadCoachRequest(req: Request): Promise<Response> {
     const profileRow = (profileRes.data as ProfileRow | null) ?? null;
     const biological = mapBiologicalPassport(profileRow);
     const pillarGoals = mapPillarGoals(profileRow);
-    const trainingDaysPerWeek = clampTrainingDaysPerWeek(profileRow?.training_days_per_week);
+    const pillarFreq = resolvePillarFrequencies(profileRow);
+    const trainingDaysPerWeek = deriveActiveTrainingDays(pillarFreq);
+    const pillarTime = resolvePillarTimeBudget(profileRow, body);
+    const mesocycleWeek = clampMesocycleWeek(profileRow?.mesocycle_week);
     const weekStartDate = getWeekStartMonday(protocolDate);
     console.log('[generate_daily_protocol] Profile + planning', {
       training_days_per_week: trainingDaysPerWeek,
+      pillarFreq,
+      mesocycleWeek,
+      cns_fatigue_score: profileRow?.cns_fatigue_score ?? 0,
       profile_training_raw: profileRow?.training_days_per_week,
+      pillarTime,
       protocolDate,
       weekStartDate,
       focus_preference,
@@ -2862,15 +3705,7 @@ export async function handleHeadCoachRequest(req: Request): Promise<Response> {
       .map((row) => row.id);
 
     const performanceLogs: PerformanceLogRow[] = (logsRes.error ? [] : logsRes.data ?? []).map(
-      (row) => ({
-        pillar: row.pillar,
-        exercise_id: row.exercise_id,
-        weight_used: row.weight_used,
-        reps_completed: row.reps_completed,
-        rpe_score: row.rpe_score,
-        timestamp: row.timestamp,
-        payload: (row.payload as PerformanceLogRow['payload']) ?? null,
-      }),
+      (row) => slimPerformanceLogFromDb(row),
     );
 
     let lastIronExerciseIds: string[] | null = null;
@@ -2924,6 +3759,7 @@ export async function handleHeadCoachRequest(req: Request): Promise<Response> {
         : flowCatalog.filter((row) => row.pillar === 'flow').map((row) => row.id);
 
     let microcycle: MicrocycleDayPayload[] = buildDeterministicMicrocycle(
+      pillarFreq,
       trainingDaysPerWeek,
       focus_preference,
       exerciseCatalog,
@@ -2941,6 +3777,8 @@ export async function handleHeadCoachRequest(req: Request): Promise<Response> {
       resolvedFlowIds,
       healerState,
       pillarGoals.goal_iron,
+      pillarTime,
+      mesocycleWeek,
     );
 
     let blocks: GameplanBlockPayload[] = blocksForDayIndex(
@@ -2949,204 +3787,51 @@ export async function handleHeadCoachRequest(req: Request): Promise<Response> {
       weekStartDate,
     );
 
-    let source: 'ai' | 'fallback' | 'deterministic' = 'deterministic';
+    const source: 'deterministic' = 'deterministic';
+    console.log('[generate_daily_protocol] Zero-Cost Clinical Engine — deterministic only ($0 API)');
 
-    if (openRouterKey && focus_preference && exerciseCatalog.length > 0) {
-      const expertContext = buildExpertContext(
-        focus_preference,
-        available_equipment,
-        pillarGoals,
-        trainingDaysPerWeek,
-        exerciseCatalog,
-        autoregulatedRoutineIds,
-        comboCatalog,
-        allowedComboIds.length > 0 ? allowedComboIds : comboCatalog.map((combo) => combo.id),
-        ironLogs3w,
-        ironLogs7d,
-        ironAutoreg,
-        mesocycleSummaries,
-        weeklyVolume,
-        combatMastery,
-        yesterdayMainRpe,
-        yesterdayMainPillar,
-        spiritEssence,
-        flowCatalog,
-        resolvedFlowIds,
-        healerState,
-        allowedSpiritTempoIds,
-      );
+    const comboIdsForHybrid =
+      allowedComboIds.length > 0 ? allowedComboIds : comboCatalog.map((combo) => combo.id);
 
-      const llmRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${openRouterKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://somma.app',
-          'X-Title': 'SOMMA Longevity OS',
-        },
-        body: JSON.stringify({
-          model: 'meta-llama/llama-3.3-70b-instruct',
-          temperature: 0.2,
-          response_format: { type: 'json_object' },
-          messages: [
-            {
-              role: 'system',
-              content: buildSystemPrompt(
-                biological,
-                pillarGoals,
-                trainingDaysPerWeek,
-                availableAssetsTag,
-              ),
-            },
-            {
-              role: 'user',
-              content: JSON.stringify({
-                date: protocolDate,
-                week_start_date: weekStartDate,
-                training_days_per_week: trainingDaysPerWeek,
-                biological_passport: biological,
-                pillar_goals: pillarGoals,
-                performance_logs: performanceLogs,
-                expert_context: expertContext,
-                catalog_counts: {
-                  exercises: exerciseCatalog.length,
-                  combat: comboCatalog.length,
-                  flow: flowCatalog.filter((r) => r.pillar === 'flow').length,
-                  spirit: flowCatalog.filter((r) => r.pillar === 'spirit').length,
-                },
-                instruction:
-                  'Plan a 7-day microcycle with exactly 7 day_index entries. Honor training_days_per_week rest/training split. Return complete exercises[], rounds[], and sequence[] on each training day.',
-              }),
-            },
-          ],
-        }),
-      });
+    microcycle = enforceGranularPillarSchedule(
+      microcycle,
+      pillarFreq,
+      exerciseCatalog,
+      autoregulatedRoutineIds,
+      ironLogs3w,
+      ironLogs7d,
+      ironAutoreg,
+      available_equipment,
+      comboCatalog,
+      comboIdsForHybrid,
+      combatMastery,
+      yesterdayMainRpe,
+      biological,
+      flowCatalog,
+      resolvedFlowIds,
+      healerState,
+      pillarGoals.goal_iron,
+      pillarTime,
+      trainingDaysPerWeek,
+      mesocycleWeek,
+    );
 
-      console.log('[generate_daily_protocol] OpenRouter response', {
-        ok: llmRes.ok,
-        status: llmRes.status,
-        statusText: llmRes.statusText,
-      });
+    microcycle = reconcileIronTargetWeightsInMicrocycle(
+      microcycle,
+      ironLogs3w,
+      pillarGoals.goal_iron,
+    );
 
-      if (llmRes.ok) {
-        const llmJson = await llmRes.json();
-        const content = llmJson?.choices?.[0]?.message?.content;
-        console.log('[generate_daily_protocol] OpenRouter content', {
-          content_type: typeof content,
-          content_length: typeof content === 'string' ? content.length : 0,
-        });
-        if (typeof content === 'string') {
-          try {
-            const parsed = JSON.parse(content) as AiBlueprintResponse;
-            console.log('[generate_daily_protocol] LLM JSON parsed', {
-              has_microcycle: Boolean(parsed.microcycle?.length),
-              microcycle_len: parsed.microcycle?.length ?? 0,
-              has_blocks: Array.isArray(parsed.blocks) ? parsed.blocks.length : 0,
-              llm_error: parsed.error,
-            });
-            if (parsed.error === 'INSUFFICIENT_CATALOG') {
-              console.warn(
-                '[generate_daily_protocol] LLM returned INSUFFICIENT_CATALOG:',
-                parsed.message,
-              );
-            } else if (parsed.microcycle?.length) {
-              const sanitizedMicrocycle = sanitizeMicrocycle(
-                parsed,
-                trainingDaysPerWeek,
-                autoregulatedRoutineIds,
-                allowedComboIds.length > 0 ? allowedComboIds : comboCatalog.map((combo) => combo.id),
-                allowedSpiritTempoIds,
-                resolvedFlowIds,
-                exerciseCatalog,
-                comboCatalog,
-                flowCatalog,
-                healerState,
-                available_equipment,
-                ironAutoreg,
-                weeklyVolume,
-              );
-              console.log('[generate_daily_protocol] sanitizeMicrocycle result', {
-                length: sanitizedMicrocycle.length,
-                active_training_days: countActiveTrainingDays(sanitizedMicrocycle),
-                expected_training_days: trainingDaysPerWeek,
-              });
-              if (sanitizedMicrocycle.length === 7) {
-                if (!isDegenerateMicrocyclePayload(sanitizedMicrocycle, trainingDaysPerWeek)) {
-                  microcycle = sanitizedMicrocycle;
-                  blocks = blocksForDayIndex(microcycle, protocolDate, weekStartDate);
-                  source = 'ai';
-                } else {
-                  console.error(
-                    '[generate_daily_protocol] Rejected sanitized LLM microcycle — degenerate week',
-                    {
-                      active: countActiveTrainingDays(sanitizedMicrocycle),
-                      expected: trainingDaysPerWeek,
-                    },
-                  );
-                }
-              } else {
-                console.warn(
-                  '[generate_daily_protocol] sanitizeMicrocycle length !== 7 — keeping deterministic',
-                  { length: sanitizedMicrocycle.length },
-                );
-              }
-            } else if (Array.isArray(parsed.blocks) && parsed.blocks.length > 0) {
-              const sanitized = sanitizeBlueprint(
-                parsed,
-                autoregulatedRoutineIds,
-                allowedComboIds.length > 0 ? allowedComboIds : comboCatalog.map((combo) => combo.id),
-                allowedSpiritTempoIds,
-                resolvedFlowIds,
-                exerciseCatalog,
-                comboCatalog,
-                flowCatalog,
-                healerState,
-                available_equipment,
-                ironAutoreg,
-                weeklyVolume,
-              );
-              if (sanitized.length > 0) {
-                const todayIndex = getDayIndexForDate(protocolDate, weekStartDate);
-                microcycle = normalizeMicrocyclePayload(
-                  [
-                    {
-                      day_index: todayIndex,
-                      is_rest_day: false,
-                      focus_label: 'AI Daily Protocol',
-                      blocks: sanitized,
-                    },
-                  ],
-                  trainingDaysPerWeek,
-                );
-                blocks = sanitized;
-                source = 'ai';
-              }
-            }
-          } catch (parseError) {
-            console.error(
-              '[generate_daily_protocol] LLM JSON parse failed — keeping deterministic',
-              parseError instanceof Error ? parseError.message : parseError,
-            );
-          }
-        } else {
-          console.warn('[generate_daily_protocol] OpenRouter returned non-string content');
-        }
-      } else {
-        const errorBody = await llmRes.text();
-        console.error('[generate_daily_protocol] OpenRouter HTTP error body', {
-          status: llmRes.status,
-          body_preview: errorBody.slice(0, 500),
-        });
-      }
-    } else if (!openRouterKey) {
-      console.warn('[generate_daily_protocol] OPENROUTER_API_KEY missing — deterministic only');
-      source = 'fallback';
-    }
+    blocks = blocksForDayIndex(microcycle, protocolDate, weekStartDate);
 
     console.log('[generate_daily_protocol] Final microcycle before upsert', {
       source,
       active_training_days: countActiveTrainingDays(microcycle),
       expected_training_days: trainingDaysPerWeek,
+      pillarFreq,
+      iron_blocks: countPillarBlocks(microcycle, 'iron'),
+      combat_blocks: countPillarBlocks(microcycle, 'combat'),
+      spirit_blocks: countPillarBlocks(microcycle, 'spirit'),
       days: microcycle.map((day) => ({
         day_index: day.day_index,
         is_rest_day: day.is_rest_day,
@@ -3154,13 +3839,16 @@ export async function handleHeadCoachRequest(req: Request): Promise<Response> {
       })),
     });
 
-    if (isDegenerateMicrocyclePayload(microcycle, trainingDaysPerWeek)) {
+    if (isDegenerateMicrocyclePayload(microcycle, pillarFreq)) {
       console.error('[generate_daily_protocol] Refusing degenerate microcycle upsert');
       return jsonResponse(
         {
           error: 'DEGENERATE_MICROCYCLE',
-          message: `Generated week has ${countActiveTrainingDays(microcycle)} training days but profile expects ${trainingDaysPerWeek}. Check catalog seeds and OPENROUTER_API_KEY.`,
+          message: `Generated week does not match pillar frequencies (Iron ${pillarFreq.frequency_iron}, Combat ${pillarFreq.frequency_combat}, Spirit ${pillarFreq.frequency_spirit}). Check catalog seeds.`,
           training_days_per_week: trainingDaysPerWeek,
+          frequency_iron: pillarFreq.frequency_iron,
+          frequency_combat: pillarFreq.frequency_combat,
+          frequency_spirit: pillarFreq.frequency_spirit,
           catalog_counts: {
             exercises: exerciseCatalog.length,
             combat: comboCatalog.length,
@@ -3178,7 +3866,7 @@ export async function handleHeadCoachRequest(req: Request): Promise<Response> {
       blocks: day.blocks.map((block) => ({ ...block, status: 'pending' as const })),
     }));
 
-    await supabase.from('daily_protocols').upsert(
+    const { error: upsertError } = await supabase.from('daily_protocols').upsert(
       {
         user_id: user.id,
         protocol_date: protocolDate,
@@ -3191,10 +3879,26 @@ export async function handleHeadCoachRequest(req: Request): Promise<Response> {
       { onConflict: 'user_id,protocol_date' },
     );
 
+    if (upsertError) {
+      console.error('[generate_daily_protocol] daily_protocols upsert failed:', upsertError.message);
+      return jsonResponse(
+        {
+          error: 'DB_UPSERT_FAILED',
+          message: upsertError.message,
+          hint: upsertError.hint ?? undefined,
+          code: upsertError.code ?? undefined,
+        },
+        500,
+      );
+    }
+
     return jsonResponse({
       date: protocolDate,
       week_start_date: weekStartDate,
       training_days_per_week: trainingDaysPerWeek,
+      frequency_iron: pillarFreq.frequency_iron,
+      frequency_combat: pillarFreq.frequency_combat,
+      frequency_spirit: pillarFreq.frequency_spirit,
       microcycle: microcycleWithStatus,
       blocks: blocksWithStatus,
       generated_at: new Date().toISOString(),

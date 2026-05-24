@@ -103,6 +103,14 @@ const authStorage = Platform.OS === 'web' ? webStorageAdapter : nativeStorageAda
 
 let client: SupabaseClient | null = null;
 
+/** Bust singleton after schema migrations or auth storage resets (dev / QA). */
+export function resetSupabaseClient(): void {
+  if (client) {
+    void client.removeAllChannels();
+  }
+  client = null;
+}
+
 export function getSupabase(): SupabaseClient | null {
   if (!isSupabaseConfigured) return null;
   if (!client) {
@@ -112,6 +120,14 @@ export function getSupabase(): SupabaseClient | null {
         autoRefreshToken: true,
         persistSession: true,
         detectSessionInUrl: Platform.OS === 'web',
+      },
+      db: {
+        schema: 'public',
+      },
+      global: {
+        headers: {
+          'X-Client-Info': 'somma-expo-v54',
+        },
       },
     });
   }

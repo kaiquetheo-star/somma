@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% load i18n static wger_extras crispy_forms_tags %}
+
+{% block title %}{% translate "Preferences" %}{% endblock %}
+
+{% block header %}
+{% endblock %}
+
+
+{% block content %}
+    {% crispy form %}
+{% endblock %}
+
+
+{% block sidebar %}
+    {% if email_verified %}
+        <p>
+            <span class="{% fa_class 'envelope-circle-check' %}  text-success"></span>
+            {% translate "Verified email" %}
+        </p>
+    {% else %}
+        <p>
+            <span class="{% fa_class 'envelope' %}"></span>
+            {% translate "Unverified email" %}
+        </p>
+    {% endif %}
+    <p>
+        <a href="{% url 'account_email' %}">{% translate "Manage email address" %}</a>
+    </p>
+    <p>
+        <small class="text-muted">
+            {% translate "You need to verify your email to contribute exercises" %}
+        </small>
+    </p>
+{% endblock %}
+
+
+
+{#         #}
+{# Options #}
+{#         #}
+{% block options %}
+    <div class="btn-group">
+        <div class="btn-group" role="group">
+            <button type="button"
+                    class="btn btn-primary btn-sm dropdown-toggle"
+                    data-bs-toggle="dropdown"
+                    aria-haspopup="true"
+                    aria-expanded="false">
+                <span class="{% fa_class 'cog' %}"></span>
+                {% translate "Options" %}
+            </button>
+            <div class="dropdown-menu">
+                <a href="{% url 'account_email' %}" class="dropdown-item">
+                    <span class="{% fa_class 'envelope' %}"></span>
+                    {% translate "Email address" %}
+                </a>
+                <a href="{% url 'core:user:change-password' %}" class="dropdown-item">
+                    <span class="{% fa_class 'key' %}"></span>
+                    {% translate "Change password" %}
+                </a>
+                <a href="{% url 'core:user:api-key' %}" class="dropdown-item">
+                    <span class="{% fa_class 'globe' %}"></span>
+                    {% translate "API key" %}
+                </a>
+                <div role="separator" class="dropdown-divider"></div>
+                {% translate 'Delete account' as text %}
+                {% modal_link url='core:user:delete' text=text css_class='dropdown-item' %}
+            </div>
+        </div>
+    </div>
+{% endblock %}
