@@ -1,10 +1,9 @@
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { AuthGlassTile } from '@/components/auth/AuthGlassTile';
 import { EmailAuthPanel } from '@/components/auth/EmailAuthPanel';
 import { isSupabaseConfigured } from '@/lib/config';
 import { useAuth } from '@/providers/AuthProvider';
@@ -12,15 +11,12 @@ import { hasCompletedFoundationScan, useSommaStore } from '@/store/useSommaStore
 
 export default function WelcomeAuthScreen() {
   const router = useRouter();
-  const { isConfigured, isLoading, session, signInWithGoogle } = useAuth();
+  const { isConfigured, isLoading, session } = useAuth();
 
   const userFoundation = useSommaStore((state) => state.user_foundation);
   const userEnvironment = useSommaStore((state) => state.user_environment);
   const userBiological = useSommaStore((state) => state.user_biological);
 
-  const [showEmailPanel, setShowEmailPanel] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const hasRoutedRef = useRef(false);
 
   const foundationComplete = hasCompletedFoundationScan({
@@ -52,18 +48,6 @@ export default function WelcomeAuthScreen() {
       return;
     }
     router.push('/(auth)/foundation');
-  };
-
-  const handleGoogleSignIn = async () => {
-    setAuthError(null);
-    setIsGoogleLoading(true);
-    try {
-      await signInWithGoogle();
-    } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Google sign-in failed.');
-    } finally {
-      setIsGoogleLoading(false);
-    }
   };
 
   if (isConfigured && isLoading) {
@@ -100,29 +84,7 @@ export default function WelcomeAuthScreen() {
 
         <View className="gap-4">
           {isConfigured ? (
-            <>
-              {showEmailPanel ? (
-                <EmailAuthPanel onCancel={() => setShowEmailPanel(false)} />
-              ) : (
-                <>
-                  <AuthGlassTile
-                    label="Continue with Email"
-                    subtitle="Magic link · no password"
-                    onPress={() => setShowEmailPanel(true)}
-                    accessibilityLabel="Sign in with email"
-                  />
-                  <AuthGlassTile
-                    label="Continue with Google"
-                    onPress={handleGoogleSignIn}
-                    disabled={isGoogleLoading}
-                    accessibilityLabel="Sign in with Google"
-                  />
-                </>
-              )}
-              {authError ? (
-                <Text className="text-center font-body text-xs text-blood-red">{authError}</Text>
-              ) : null}
-            </>
+            <EmailAuthPanel />
           ) : (
             <>
               <Pressable

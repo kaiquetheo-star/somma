@@ -4,7 +4,7 @@ import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-nativ
 import { useAuth } from '@/providers/AuthProvider';
 
 interface EmailAuthPanelProps {
-  onCancel: () => void;
+  onCancel?: () => void;
 }
 
 export function EmailAuthPanel({ onCancel }: EmailAuthPanelProps) {
@@ -41,11 +41,13 @@ export function EmailAuthPanel({ onCancel }: EmailAuthPanelProps) {
         <Text className="font-body text-sm leading-6 text-[#A8B0A4]">
           Open the email on this device and tap the link to enter SOMMA.
         </Text>
-        <Pressable onPress={onCancel} className="mt-2 active:opacity-70">
-          <Text className="font-body text-xs uppercase tracking-[0.3em] text-[#6B7568]">
-            Dismiss
-          </Text>
-        </Pressable>
+        {onCancel ? (
+          <Pressable onPress={onCancel} className="mt-2 active:opacity-70">
+            <Text className="font-body text-xs uppercase tracking-[0.3em] text-[#6B7568]">
+              Dismiss
+            </Text>
+          </Pressable>
+        ) : null}
       </View>
     );
   }
@@ -66,29 +68,19 @@ export function EmailAuthPanel({ onCancel }: EmailAuthPanelProps) {
         className="rounded-xl border border-white/10 bg-obsidian px-4 py-3 font-body text-base text-[#E8E4DC]"
       />
       {error ? <Text className="font-body text-xs text-blood-red">{error}</Text> : null}
-      <View className="flex-row gap-3">
-        <Pressable
-          onPress={onCancel}
-          className="flex-1 rounded-xl border border-white/10 py-3 active:opacity-70"
-        >
-          <Text className="text-center font-body text-xs uppercase tracking-[0.25em] text-[#6B7568]">
-            Cancel
+      <Pressable
+        onPress={handleSendLink}
+        disabled={isSending}
+        className="rounded-xl border border-matte-gold/40 bg-matte-gold/10 py-4 active:opacity-80"
+      >
+        {isSending ? (
+          <ActivityIndicator color="#BFA06A" />
+        ) : (
+          <Text className="text-center font-body-medium text-xs uppercase tracking-[0.25em] text-matte-gold">
+            Send magic link
           </Text>
-        </Pressable>
-        <Pressable
-          onPress={handleSendLink}
-          disabled={isSending}
-          className="flex-1 rounded-xl border border-matte-gold/40 bg-matte-gold/10 py-3 active:opacity-80"
-        >
-          {isSending ? (
-            <ActivityIndicator color="#BFA06A" />
-          ) : (
-            <Text className="text-center font-body-medium text-xs uppercase tracking-[0.25em] text-matte-gold">
-              Send Link
-            </Text>
-          )}
-        </Pressable>
-      </View>
+        )}
+      </Pressable>
     </View>
   );
 }
