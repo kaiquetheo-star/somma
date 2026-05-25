@@ -44,6 +44,8 @@ export const DEFAULT_LOCAL_BIOLOGICAL: BiologicalProfile = {
   mesocycle_week: 1,
   cns_fatigue_score: 0,
   clinical_exit_interview: null,
+  current_body_fat_estimate: null,
+  target_archetype: null,
 };
 
 export function defaultLocalFocusPreference(): FocusPreference {

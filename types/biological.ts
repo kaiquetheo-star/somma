@@ -1,5 +1,14 @@
 import type { ClinicalExitInterview } from '@/types/clinical';
 
+/** Shape archetype for Natural Target Timeline steering */
+export type TargetArchetype = 'AESTHETIC_V_TAPER' | 'POWERBUILDER_BULK' | 'LEAN_RECOMP';
+
+export const TARGET_ARCHETYPE_OPTIONS: { id: TargetArchetype; label: string; description: string }[] = [
+  { id: 'AESTHETIC_V_TAPER', label: 'Aesthetic V-Taper', description: 'Wide shoulders, narrow waist — delt/lat priority' },
+  { id: 'POWERBUILDER_BULK', label: 'Powerbuilder Bulk', description: 'Mass + strength — compound intensity baseline' },
+  { id: 'LEAN_RECOMP', label: 'Lean Recomp', description: 'Simultaneous fat loss + muscle gain — moderate deficit' },
+];
+
 /** Biological Passport — maps to `profiles` anthropometric + pillar goal columns */
 export interface BiologicalProfile {
   date_of_birth: string | null;
@@ -28,6 +37,10 @@ export interface BiologicalProfile {
   cns_fatigue_score: number | null;
   /** Month 1 exit interview — calibrates Month 2 target loads */
   clinical_exit_interview: ClinicalExitInterview | null;
+  /** User-reported body fat estimate (%) for timeline calculation */
+  current_body_fat_estimate: number | null;
+  /** Selected shape archetype driving volume allocation + natural timeline */
+  target_archetype: TargetArchetype | null;
 }
 
 export const PILLAR_FREQUENCY_MIN = 0;
@@ -105,6 +118,8 @@ export const initialBiologicalProfile: BiologicalProfile = {
   mesocycle_week: 1,
   cns_fatigue_score: 0,
   clinical_exit_interview: null,
+  current_body_fat_estimate: null,
+  target_archetype: null,
 };
 
 export function clampMesocycleWeekProfile(value: number | null | undefined): number {

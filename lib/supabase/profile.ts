@@ -72,6 +72,8 @@ function mapProfileBiology(row: Record<string, unknown> | null): BiologicalProfi
       mesocycle_week: null,
       cns_fatigue_score: null,
       clinical_exit_interview: null,
+      current_body_fat_estimate: null,
+      target_archetype: null,
     };
   }
 
@@ -138,6 +140,13 @@ function mapProfileBiology(row: Record<string, unknown> | null): BiologicalProfi
       row.cns_fatigue_score != null ? Number(row.cns_fatigue_score) : null,
     ),
     clinical_exit_interview: null,
+    current_body_fat_estimate:
+      row.current_body_fat_estimate != null ? Number(row.current_body_fat_estimate) : null,
+    target_archetype:
+      typeof row.target_archetype === 'string' &&
+      ['AESTHETIC_V_TAPER', 'POWERBUILDER_BULK', 'LEAN_RECOMP'].includes(row.target_archetype)
+        ? (row.target_archetype as BiologicalProfile['target_archetype'])
+        : null,
   };
 }
 

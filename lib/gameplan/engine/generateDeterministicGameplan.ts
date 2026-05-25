@@ -56,6 +56,8 @@ export interface GenerateDeterministicGameplanInput {
   performanceLogs: PerformanceLogEntry[];
   /** Optional override for today's date (tests) */
   protocolDate?: string;
+  /** Metabolic Steering: true when 2+ consecutive deficit days detected */
+  glycogenDepleted?: boolean;
 }
 
 function todayDateKey(): string {
@@ -185,6 +187,8 @@ export async function generateDeterministicGameplan(
         pillarTime,
         mesocycleWeek,
         input.biological.clinical_exit_interview,
+        input.biological.target_archetype,
+        input.glycogenDepleted ?? false,
       );
       ironBlockForPrereqs.order = order++;
       blocks.push(ironBlockForPrereqs);

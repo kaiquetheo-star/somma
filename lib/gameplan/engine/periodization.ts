@@ -6,6 +6,7 @@ import {
   clampTrainingDaysPerWeek,
   deriveTrainingDaysFromFrequencies,
   type BiologicalProfile,
+  type TargetArchetype,
 } from '@/types/biological';
 import type { LibraryExercise } from '@/types/catalog';
 import type { EquipmentTag } from '@/store/useSommaStore';
@@ -207,4 +208,65 @@ export function expandRoutineIdsForTime(
   targetCount: number,
 ): string[] {
   return routineIds.slice(0, targetCount);
+}
+
+/**
+ * Archetype-aware volume steering: adjusts weekly set cap per muscle group.
+ * AESTHETIC_V_TAPER: +4 sets for delts/lats, standard elsewhere.
+ * POWERBUILDER_BULK: +2 sets globally (higher intensity baseline).
+ * LEAN_RECOMP: standard caps (no extra volume, preserve deficit recovery).
+ */
+export function archetypeVolumeCapAdjustment(
+  archetype: TargetArchetype | null,
+  primaryMuscle: string | null,
+): number {
+  if (!archetype || !primaryMuscle) return 0;
+
+  const muscle = primaryMuscle.toLowerCase();
+
+  switch (archetype) {
+    case 'AESTHETIC_V_TAPER': {
+      if (muscle === 'deltoids' || muscle === 'shoulders' || muscle === 'lateral deltoid') return 4;
+      if (muscle === 'lats' || muscle === 'latissimus dorsi' || muscle === 'back') return 4;
+      if (muscle === 'rear deltoid') return 3;
+      return 0;
+    }
+    case 'POWERBUILDER_BULK':
+      return 2;
+    case 'LEAN_RECOMP':
+      return 0;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Archetype-aware exercise count adjustment for iron sessions.
+ * V-Taper: +1 exercise (extra isolation for delts/lats).
+ * Powerbuilder: standard count, higher per-exercise intensity instead.
+ * Lean Recomp: -1 exercise (shorter sessions, preserve recovery in deficit).
+ */
+export function archetypeExerciseCountDelta(archetype: TargetArchetype | null): number {
+  if (!archetype) return 0;
+  switch (archetype) {
+    case 'AESTHETIC_V_TAPER': return 1;
+    case 'POWERBUILDER_BULK': return 0;
+    case 'LEAN_RECOMP': return -1;
+    default: return 0;
+  }
+}
+
+/**
+ * Archetype-aware RIR adjustment baseline.
+ * Powerbuilder: -1 RIR (train closer to failure for strength adaptation).
+ * V-Taper: standard.
+ * Lean Recomp: +1 RIR (preserve recovery under caloric deficit).
+ */
+export function archetypeRirDelta(archetype: TargetArchetype | null): number {
+  if (!archetype) return 0;
+  switch (archetype) {
+    case 'POWERBUILDER_BULK': return -1;
+    case 'LEAN_RECOMP': return 1;
+    default: return 0;
+  }
 }
