@@ -5,10 +5,12 @@ interface TargetLoadBannerProps {
   repRange?: string;
   /** Whether load came from Head Coach prescription vs live E1RM query */
   source?: 'prescription' | 'e1rm';
+  /** One-line autoreg hint from last reported RIR */
+  loadHint?: string | null;
 }
 
 /** Prominent SHRED-style target load — tells the athlete exactly what to pick up */
-export function TargetLoadBanner({ targetKg, repRange, source }: TargetLoadBannerProps) {
+export function TargetLoadBanner({ targetKg, repRange, source, loadHint }: TargetLoadBannerProps) {
   const hasLoad = targetKg != null && targetKg > 0;
 
   if (!hasLoad) {
@@ -48,6 +50,11 @@ export function TargetLoadBanner({ targetKg, repRange, source }: TargetLoadBanne
       {source === 'e1rm' ? (
         <Text className="mt-2 font-body text-[10px] uppercase tracking-[0.25em] text-[#6B7568]">
           Calibrated from your 3-week strength profile
+        </Text>
+      ) : null}
+      {loadHint ? (
+        <Text className="mt-2 font-body text-[10px] uppercase tracking-[0.22em] text-matte-gold/85">
+          {loadHint}
         </Text>
       ) : null}
     </View>

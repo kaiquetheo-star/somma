@@ -9,14 +9,15 @@ import { FlowGestureZones } from '@/components/spirit/FlowGestureZones';
 import { FlowStepper } from '@/components/spirit/FlowStepper';
 import { SanctuaryBreathOrb } from '@/components/spirit/SanctuaryBreathOrb';
 import { CommandCenterShell } from '@/components/command-center/CommandCenterShell';
+import { LoadingFallback } from '@/components/routing/LoadingFallback';
 import {
   FLOW_BREATH_DYNAMIC,
   FLOW_BREATH_STATIC,
   formatSpiritTimer,
   SPIRIT_SANCTUARY,
 } from '@/constants/spirit';
-import { useActiveGameplanBlock } from '@/hooks/useActiveGameplanBlock';
 import { useRequireDailyScan } from '@/hooks/useRequireDailyScan';
+import { useWorkoutBlockReady } from '@/hooks/useWorkoutBlockReady';
 import { useBreathworkEngine } from '@/hooks/useBreathworkEngine';
 import { useFlowAsanaSession } from '@/hooks/useFlowAsanaSession';
 import { useSpiritBreathCatalog } from '@/hooks/useSpiritBreathCatalog';
@@ -57,7 +58,7 @@ export default function SpiritModeScreen() {
   const router = useRouter();
   const { blockId, title } = useLocalSearchParams<{ blockId?: string; title?: string }>();
   useRequireDailyScan({ blockId, title, pillar: 'spirit' });
-  const activeBlock = useActiveGameplanBlock(blockId);
+  const { activeBlock, isReady, waitingForBlock } = useWorkoutBlockReady(blockId);
   const { finishBlock } = useWorkoutNavigation();
   const appendSpiritSession = useSommaStore((state) => state.appendSpiritSession);
 
@@ -228,6 +229,12 @@ export default function SpiritModeScreen() {
     isFlowMode,
   ]);
 
+  if (!isReady || waitingForBlock) {
+    return (
+      <LoadingFallback message="Loading spirit protocol…" eyebrow="Spirit & Flow" />
+    );
+  }
+
   return (
     <GestureHandlerRootView style={styles.root}>
       <StatusBar style="light" />
@@ -298,8 +305,8 @@ export default function SpiritModeScreen() {
             <View style={styles.sequenceRail}>
               <FlatList
                 horizontal
-                data={spiritSequence.length > 0 ? spiritSequence : flowSession.sortedAsanas}
-                keyExtractor={(item) => item.asana_id}
+                data={spiritSequence.length > 0 ? spiritSequence : (flowSession.sortedAsanas ?? [])}
+                keyExtractor={(item) => item.asana_id ?? item.slug ?? String(item.order)}
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.sequenceContent}
                 renderItem={({ item, index }) => {

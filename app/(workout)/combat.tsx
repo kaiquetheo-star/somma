@@ -18,9 +18,10 @@ import {
 import { ComboSequencePanel } from '@/components/combat/ComboSequencePanel';
 import { RpeSelector } from '@/components/combat/RpeSelector';
 import { CommandCenterShell } from '@/components/command-center/CommandCenterShell';
+import { LoadingFallback } from '@/components/routing/LoadingFallback';
 import { COMBAT_ARENA, comboCalloutFull, formatTimer } from '@/constants/combat';
-import { useActiveGameplanBlock } from '@/hooks/useActiveGameplanBlock';
 import { useRequireDailyScan } from '@/hooks/useRequireDailyScan';
+import { useWorkoutBlockReady } from '@/hooks/useWorkoutBlockReady';
 import {
   comboFromLibrary,
   useCombatInterval,
@@ -49,7 +50,7 @@ export default function CombatModeScreen() {
   const router = useRouter();
   const { blockId, title } = useLocalSearchParams<{ blockId?: string; title?: string }>();
   useRequireDailyScan({ blockId, title, pillar: 'combat' });
-  const activeBlock = useActiveGameplanBlock(blockId);
+  const { activeBlock, isReady, waitingForBlock } = useWorkoutBlockReady(blockId);
   const combatMastery = useSommaStore((state) => state.user_stats.combat_mastery);
   const { finishBlock } = useWorkoutNavigation();
   const appendCombatSession = useSommaStore((state) => state.appendCombatSession);
@@ -77,11 +78,11 @@ export default function CombatModeScreen() {
   }, []);
 
   const roundSchedule = useMemo((): CombatRoundConfig[] | undefined => {
-    const rounds = activeBlock?.combat?.rounds;
-    if (!rounds?.length || catalog.length === 0) return undefined;
+    const rounds = activeBlock?.combat?.rounds ?? [];
+    if (!rounds.length || catalog.length === 0) return undefined;
 
     const eligible = filterCombatByMastery(catalog, combatMastery);
-    const sortedRounds = [...rounds].sort((a, b) => a.round_index - b.round_index);
+    const sortedRounds = [...rounds].sort((a, b) => (a.round_index ?? 0) - (b.round_index ?? 0));
 
     return sortedRounds.flatMap((round, scheduleIndex) => {
       const focusPool = filterCombatByTacticalFocus(eligible, round.tactical_focus);
@@ -164,12 +165,13 @@ export default function CombatModeScreen() {
   );
 
   const activeCoachIntent = useMemo(() => {
-    const structure = activeBlock?.combat?.rounds_structure;
-    if (!structure?.length) return null;
+    const structure = activeBlock?.combat?.rounds_structure ?? [];
+    if (!structure.length) return null;
     return (
       structure.find(
         (segment) =>
-          currentRound >= segment.round_start && currentRound <= segment.round_end,
+          currentRound >= (segment.round_start ?? 0) &&
+          currentRound <= (segment.round_end ?? 0),
       )?.coach_intent ?? null
     );
   }, [activeBlock?.combat?.rounds_structure, currentRound]);
@@ -225,7 +227,11 @@ export default function CombatModeScreen() {
     });
   };
 
-  if (catalogLoading && activeBlock?.combat?.rounds?.length) {
+  if (!isReady || waitingForBlock) {
+    return <LoadingFallback message="Loading combat protocol…" eyebrow="Blood & Bone" />;
+  }
+
+  if (catalogLoading && (activeBlock?.combat?.rounds?.length ?? 0) > 0) {
     return (
       <View className="flex-1 items-center justify-center bg-obsidian">
         <StatusBar style="light" />
@@ -364,9 +370,9 @@ export default function CombatModeScreen() {
                     {activeCoachIntent}
                   </Text>
                 ) : null}
-                {phase === 'idle' && activeBlock?.combat?.rounds_structure?.length ? (
+                {phase === 'idle' && (activeBlock?.combat?.rounds_structure?.length ?? 0) > 0 ? (
                   <Text className="font-body text-[10px] uppercase tracking-[0.35em] text-matte-gold/60">
-                    {activeBlock.combat.rounds_structure
+                    {(activeBlock?.combat?.rounds_structure ?? [])
                       .map((segment) => {
                         const range =
                           segment.round_start === segment.round_end

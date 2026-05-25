@@ -11,7 +11,7 @@ export function useActiveGameplanBlock(blockId: string | undefined): GameplanBlo
     if (!blockId || !weeklyMicrocycle) return null;
 
     for (const day of weeklyMicrocycle) {
-      const block = day.blocks.find((entry) => entry.id === blockId);
+      const block = day.blocks?.find((entry) => entry.id === blockId);
       if (block) return block;
     }
 

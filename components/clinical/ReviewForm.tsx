@@ -10,12 +10,21 @@ const MUTED = '#6B7568';
 export interface ReviewFormProps {
   title?: string;
   description?: string;
+  /** Pre-filled from on-device load telemetry (iron + combat, 21d) */
+  suggestedAverageRpe?: number | null;
   onSubmit: (interview: ClinicalExitInterview) => void;
 }
 
 /** End-of-Month Clinical Exit Interview — Month 2 load calibration */
-export function ReviewForm({ title, description, onSubmit }: ReviewFormProps) {
-  const [averageRpe, setAverageRpe] = useState('');
+export function ReviewForm({
+  title,
+  description,
+  suggestedAverageRpe,
+  onSubmit,
+}: ReviewFormProps) {
+  const [averageRpe, setAverageRpe] = useState(
+    suggestedAverageRpe != null ? String(suggestedAverageRpe) : '',
+  );
   const [perceivedFatigue, setPerceivedFatigue] = useState('');
   const [estimated1rm, setEstimated1rm] = useState('');
 
@@ -62,6 +71,11 @@ export function ReviewForm({ title, description, onSubmit }: ReviewFormProps) {
         {description ??
           'Submit honest averages from Month 1. Month 2 target loads will anchor to your reported strength, not estimates alone.'}
       </Text>
+      {suggestedAverageRpe != null ? (
+        <Text className="mt-3 font-body text-[10px] uppercase tracking-[0.28em] text-matte-gold/80">
+          Telemetry suggests RPE {suggestedAverageRpe.toFixed(1)} — adjust if needed
+        </Text>
+      ) : null}
 
       <View className="mt-6 gap-4">
         <Field

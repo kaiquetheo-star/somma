@@ -11,6 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BiomarkerGrid } from '@/components/analytics/BiomarkerGrid';
+import { LoadTelemetryStrip } from '@/components/iron/LoadTelemetryStrip';
 import { BiologicalPassportSummary } from '@/components/analytics/BiologicalPassportSummary';
 import { BiologicalPassportForm } from '@/components/foundation/BiologicalPassportForm';
 import { useBiomarkerVault } from '@/hooks/useBiomarkerVault';
@@ -31,6 +32,7 @@ export default function AnalyticsScreen() {
   const storedBiological = useSommaStore((state) => state.user_biological);
   const setUserBiological = useSommaStore((state) => state.setUserBiological);
   const resetStore = useSommaStore((state) => state.resetStore);
+  const performanceLogs = useSommaStore((state) => state.performance_logs);
 
   const [draft, setDraft] = useState<BiologicalProfile>(storedBiological);
   const [saving, setSaving] = useState(false);
@@ -76,10 +78,14 @@ export default function AnalyticsScreen() {
 
     setSaving(true);
     try {
-      setUserBiological(draft);
+      const normalized: BiologicalProfile = {
+        ...draft,
+        current_injuries: draft.current_injuries?.trim() || null,
+      };
+      setUserBiological(normalized);
 
       if (isSupabaseConfigured && session?.user?.id) {
-        await upsertBiologicalPassport(session.user.id, draft);
+        await upsertBiologicalPassport(session.user.id, normalized);
       }
 
       Alert.alert('Passport updated', 'Your biological baseline is saved and will inform AI protocols.');
@@ -131,6 +137,8 @@ export default function AnalyticsScreen() {
         className="flex-1"
         contentContainerClassName="px-8 pb-12 pt-8"
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
       >
         <Text className="font-body text-[10px] uppercase tracking-[0.4em] text-matte-gold/70">
           Biological Passport
@@ -148,6 +156,12 @@ export default function AnalyticsScreen() {
         ) : (
           <View className="mt-8 gap-8">
             <BiologicalPassportSummary profile={draft} />
+
+            <LoadTelemetryStrip
+              performanceLogs={performanceLogs}
+              goalIron={draft.goal_iron ?? storedBiological.goal_iron}
+              variant="detail"
+            />
 
             <BiomarkerGrid
               latest={biomarkerVault.latest}

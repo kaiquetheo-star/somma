@@ -5,7 +5,11 @@ export interface IronSetLog {
   weight_kg: number;
   reps: number;
   target_reps: number;
-  /** Reps in reserve at set completion (0–4) */
+  /** Prescribed RIR at set completion (0–4) */
+  target_rir?: number | null;
+  /** Athlete-reported RIR after the set (0–4) — drives load telemetry */
+  reported_rir?: number | null;
+  /** @deprecated Use reported_rir — kept for persisted offline rows */
   rir?: number | null;
   rest_seconds_used: number;
   logged_at: string;

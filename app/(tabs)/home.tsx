@@ -3,13 +3,16 @@ import { useEffect, useMemo } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { LoadingFallback } from '@/components/routing/LoadingFallback';
 import { AttunementOrbsPanel } from '@/components/sanctuary/AttunementOrbsPanel';
 import { ReviewForm } from '@/components/clinical/ReviewForm';
 import { GameplanBlockCard } from '@/components/sanctuary/GameplanBlockCard';
 import { WeeklyMicrocycleStrip } from '@/components/sanctuary/WeeklyMicrocycleStrip';
+import { useStoreHydrated } from '@/hooks/useStoreHydrated';
 import { useUserStatsRealtime } from '@/hooks/useUserStatsRealtime';
 import { useWorkoutNavigation } from '@/hooks/useWorkoutNavigation';
 import { prefetchLibraryCatalogs } from '@/lib/catalog/library';
+import { suggestedAverageRpeForClinicalReview } from '@/lib/physics/loadTelemetry';
 import { isProtocolDateStale } from '@/lib/gameplan/generateStubGameplan';
 import { getTodayDayIndex, MICROCYCLE_DAY_LABELS } from '@/lib/gameplan/microcycleWeek';
 import { useAuth } from '@/providers/AuthProvider';
@@ -24,6 +27,7 @@ import type { DailyGameplan } from '@/types/gameplan';
 /** The Daily Command — Sanctuary hub (FSD §3.2) */
 export default function DailyCommandScreen() {
   const router = useRouter();
+  const storeHydrated = useStoreHydrated();
   const { user } = useAuth();
   const userStats = useSommaStore((state) => state.user_stats);
   const userEnvironment = useSommaStore((state) => state.user_environment);
@@ -45,8 +49,14 @@ export default function DailyCommandScreen() {
   const regenerateDailyGameplan = useSommaStore((state) => state.regenerateDailyGameplan);
   const getClinicalReviewTrigger = useSommaStore((state) => state.getClinicalReviewTrigger);
   const submitClinicalExitInterview = useSommaStore((state) => state.submitClinicalExitInterview);
+  const performanceLogs = useSommaStore((state) => state.performance_logs);
 
   const clinicalReviewTrigger = getClinicalReviewTrigger();
+
+  const suggestedClinicalRpe = useMemo(
+    () => suggestedAverageRpeForClinicalReview(performanceLogs),
+    [performanceLogs],
+  );
 
   const { openBlock } = useWorkoutNavigation();
 
@@ -94,9 +104,9 @@ export default function DailyCommandScreen() {
     void prefetchLibraryCatalogs();
   }, [foundationComplete]);
 
-  const completedCount =
-    selectedDay?.blocks.filter((block) => block.status === 'completed').length ?? 0;
-  const totalCount = selectedDay?.blocks.length ?? 0;
+  const dayBlocks = selectedDay?.blocks ?? [];
+  const completedCount = dayBlocks.filter((block) => block.status === 'completed').length;
+  const totalCount = dayBlocks.length;
 
   const selectedDayLabel = MICROCYCLE_DAY_LABELS[selectedDayIndex - 1] ?? 'Day';
   const protocolHeading =
@@ -114,6 +124,10 @@ export default function DailyCommandScreen() {
           : gameplanSource === 'stub'
             ? 'Local protocol'
             : null;
+
+  if (!storeHydrated) {
+    return <LoadingFallback message="Restoring your sanctuary state…" />;
+  }
 
   return (
     <SafeAreaView className="flex-1 bg-[#0F1512]">
@@ -149,6 +163,7 @@ export default function DailyCommandScreen() {
                 <ReviewForm
                   title={clinicalReviewTrigger.title}
                   description={clinicalReviewTrigger.description}
+                  suggestedAverageRpe={suggestedClinicalRpe}
                   onSubmit={(interview) => void submitClinicalExitInterview(interview)}
                 />
               </View>
@@ -236,10 +251,9 @@ export default function DailyCommandScreen() {
                     No intense protocols scheduled.
                   </Text>
                 </View>
-              ) : !gameplanError && selectedDay
-                ? selectedDay.blocks
-                    .slice()
-                    .sort((a, b) => a.order - b.order)
+              ) : !gameplanError && selectedDay && dayBlocks.length > 0
+                ? [...dayBlocks]
+                    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
                     .map((block) => (
                       <GameplanBlockCard
                         key={block.id}

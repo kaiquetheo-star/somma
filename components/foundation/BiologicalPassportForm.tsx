@@ -1,6 +1,7 @@
 import { Text, TextInput, View } from 'react-native';
 
 import { PillarGoalSelect } from '@/components/foundation/PillarGoalSelect';
+import { webTextInputProps } from '@/lib/ux/webTextInput';
 import { TrainingFrequencySelect } from '@/components/foundation/TrainingFrequencySelect';
 import { ValueStepper } from '@/components/iron/ValueStepper';
 import { RpeSelector } from '@/components/combat/RpeSelector';
@@ -83,15 +84,23 @@ export function BiologicalPassportForm({ value, onChange }: BiologicalPassportFo
         </Text>
         <TextInput
           value={value.current_injuries ?? ''}
-          onChangeText={(text) =>
-            onChange({ current_injuries: text.trim() ? text.trim() : null })
-          }
+          onChangeText={(text) => onChange({ current_injuries: text.length > 0 ? text : null })}
+          onBlur={() => {
+            const trimmed = value.current_injuries?.trim();
+            if (trimmed !== value.current_injuries) {
+              onChange({ current_injuries: trimmed && trimmed.length > 0 ? trimmed : null });
+            }
+          }}
           placeholder="e.g. Left shoulder impingement — avoid overhead press"
           placeholderTextColor="#4A5D44"
           multiline
           numberOfLines={3}
           textAlignVertical="top"
+          autoCapitalize="sentences"
+          autoCorrect
+          editable
           className="min-h-[88px] rounded-2xl border border-white/10 bg-white/5 px-4 py-4 font-body text-sm leading-6 text-[#E8E4DC]"
+          {...webTextInputProps()}
         />
       </View>
 

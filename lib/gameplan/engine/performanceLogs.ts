@@ -1,3 +1,4 @@
+import { effectiveRpeFromSet } from '@/lib/physics/loadTelemetry';
 import type { PerformanceLogEntry } from '@/types/performance';
 
 /** Flat row shape for mesocycle / E1RM engines */
@@ -11,7 +12,13 @@ export interface EnginePerformanceRow {
   payload?: {
     iron?: {
       exercise_id?: string;
-      sets?: { weight_kg?: number; reps?: number; rpe?: number }[];
+      sets?: {
+        weight_kg?: number;
+        reps?: number;
+        reported_rir?: number | null;
+        target_rir?: number | null;
+        rir?: number | null;
+      }[];
     };
     volume?: number;
   } | null;
@@ -23,12 +30,13 @@ export function flattenPerformanceLogs(entries: PerformanceLogEntry[]): EnginePe
   for (const entry of entries) {
     if (entry.pillar === 'iron' && entry.iron?.sets.length) {
       const lastSet = entry.iron.sets[entry.iron.sets.length - 1];
+      const lastRpe = lastSet ? effectiveRpeFromSet(lastSet) : null;
       rows.push({
         pillar: 'iron',
         exercise_id: entry.iron.exercise_id,
         weight_used: lastSet?.weight_kg ?? null,
         reps_completed: lastSet?.reps ?? null,
-        rpe_score: lastSet?.rir ?? null,
+        rpe_score: lastRpe,
         timestamp: entry.timestamp,
         payload: {
           iron: {
@@ -36,6 +44,8 @@ export function flattenPerformanceLogs(entries: PerformanceLogEntry[]): EnginePe
             sets: entry.iron.sets.map((set) => ({
               weight_kg: set.weight_kg,
               reps: set.reps,
+              reported_rir: set.reported_rir ?? set.rir ?? null,
+              target_rir: set.target_rir ?? null,
             })),
           },
         },

@@ -58,11 +58,15 @@ export function useWorkoutNavigation() {
     }
 
     const route = WORKOUT_ROUTES[block.pillar];
+    if (!route) {
+      console.warn('[SOMMA] No workout route for pillar:', block.pillar);
+      return;
+    }
     router.push({
       pathname: route,
       params: {
         blockId: block.id,
-        title: block.title,
+        title: block.title ?? '',
       },
     } as Href);
   };

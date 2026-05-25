@@ -98,6 +98,7 @@ function parseBlockedJointProfiles(injuries: string | null): string[] {
 export function detectIronAutoregulation(
   biological: BiologicalProfile,
   yesterdayMainRpe: number | null,
+  loadTelemetryOverload = false,
 ): IronAutoregulationState {
   const stress = biological.baseline_stress_level;
   const cnsFatigue = biological.cns_fatigue_score ?? 0;
@@ -106,6 +107,7 @@ export function detectIronAutoregulation(
   const poorRecovery =
     highCnsFatigue ||
     highStress ||
+    loadTelemetryOverload ||
     (yesterdayMainRpe != null && yesterdayMainRpe >= 8) ||
     (stress != null && stress >= 7 && yesterdayMainRpe != null && yesterdayMainRpe >= 7);
 

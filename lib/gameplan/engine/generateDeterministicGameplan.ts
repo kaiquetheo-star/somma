@@ -26,6 +26,11 @@ import {
   type EnginePerformanceRow,
 } from '@/lib/gameplan/engine/performanceLogs';
 import {
+  computeTrainingLoadSnapshot,
+  telemetrySuggestsPoorRecovery,
+  yesterdayEffectiveRpe,
+} from '@/lib/physics/loadTelemetry';
+import {
   applyNeuroMechanicalOrderingToMicrocycle,
   ironExerciseNamesFromBlock,
   resolveBiomechanicalPrerequisiteSlugs,
@@ -80,14 +85,6 @@ function countPillarBlocks(microcycle: MicrocycleDay[], pillar: 'iron' | 'combat
   );
 }
 
-function yesterdayMainFromLogs(logs: EnginePerformanceRow[]): {
-  rpe: number | null;
-  pillar: string | null;
-} {
-  const main = logs.find((log) => ['iron', 'combat', 'spirit', 'flow'].includes(log.pillar));
-  return { rpe: main?.rpe_score ?? null, pillar: main?.pillar ?? null };
-}
-
 /**
  * Local Head Coach — $0 API. Builds a 7-day microcycle from catalog + passport + logs.
  */
@@ -119,9 +116,16 @@ export async function generateDeterministicGameplan(
   const flatLogs = flattenPerformanceLogs(input.performanceLogs);
   const ironLogs3w = filterIronLogsLastDays(flatLogs, MESOCYCLE_DAYS);
   const ironLogs7d = filterIronLogsLastDays(flatLogs, WEEKLY_VOLUME_DAYS);
-  const { rpe: yesterdayMainRpe } = yesterdayMainFromLogs(flatLogs);
+  const loadSnapshot = computeTrainingLoadSnapshot(input.performanceLogs, {
+    goalIron: input.biological.goal_iron,
+  });
+  const { rpe: yesterdayMainRpe } = yesterdayEffectiveRpe(input.performanceLogs);
 
-  const autoreg = detectIronAutoregulation(input.biological, yesterdayMainRpe);
+  const autoreg = detectIronAutoregulation(
+    input.biological,
+    yesterdayMainRpe,
+    telemetrySuggestsPoorRecovery(loadSnapshot, input.biological.goal_iron),
+  );
   const baseRoutine = applyIronRoutineAutoregulation(
     resolveBaseRoutineIds(catalog, input.equipment),
     catalog,

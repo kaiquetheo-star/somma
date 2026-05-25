@@ -54,12 +54,13 @@ function isFresh(fetchedAt: string): boolean {
   return Date.now() - ts < CACHE_TTL_MS;
 }
 
-async function readCache<T>(key: string): Promise<T[] | null> {
+async function readCache<T>(key: string, options?: { allowStale?: boolean }): Promise<T[] | null> {
   try {
     const raw = await AsyncStorage.getItem(key);
     if (!raw) return null;
     const envelope = JSON.parse(raw) as CacheEnvelope<T>;
-    if (!envelope?.rows?.length || !isFresh(envelope.fetched_at)) return null;
+    if (!envelope?.rows?.length) return null;
+    if (!options?.allowStale && !isFresh(envelope.fetched_at)) return null;
     return envelope.rows;
   } catch {
     return null;
@@ -196,12 +197,36 @@ async function fetchTable<T>(
   const supabase = getSupabase();
   if (!supabase) return [];
 
-  const { data, error } = await supabase.from(table).select(select);
-  if (error) {
-    console.warn(`[SOMMA] ${table} fetch failed:`, error.message);
+  let data: Record<string, unknown>[] | null = null;
+  let fetchError: { message: string } | null = null;
+
+  try {
+    const result = await supabase.from(table).select(select);
+    data = (result.data as Record<string, unknown>[] | null) ?? null;
+    fetchError = result.error;
+  } catch (err) {
+    console.warn(
+      `[SOMMA] ${table} fetch threw:`,
+      err instanceof Error ? err.message : err,
+    );
+    fetchError = { message: 'network' };
+  }
+
+  if (fetchError) {
+    console.warn(`[SOMMA] ${table} fetch failed:`, fetchError.message);
+    const stale = await readCache<T>(cacheKey, { allowStale: true });
+    if (stale?.length) {
+      memoryRef.current = stale;
+      return stale;
+    }
     return memoryRef.current ?? [];
   }
   if (!data?.length) {
+    const stale = await readCache<T>(cacheKey, { allowStale: true });
+    if (stale?.length) {
+      memoryRef.current = stale;
+      return stale;
+    }
     return memoryRef.current ?? [];
   }
 

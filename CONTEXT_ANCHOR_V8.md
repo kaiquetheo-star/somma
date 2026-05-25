@@ -6,7 +6,7 @@
 |------|--------|
 | **Product** | SOMMA — The Longevity OS |
 | **North star** | SHRED-level performance for ~6×/week athletes |
-| **Checkpoint** | May 2026 — Text-Only Elite · **local $0 Head Coach** · granular pillar frequencies · migrations **001–021** |
+| **Checkpoint** | May 2026 — Text-Only Elite · **local $0 Head Coach** · **Vercel web-only export** · migrations **001–021** |
 | **Prior anchors** | V1–V7 — historical only |
 | **Last commit** | *(uncommitted session work — verify with `git log -1`)* |
 | **Deploy gate** | **`021` migration** must be applied; Edge LLM is **opt-in** only |
@@ -24,6 +24,26 @@
 | **Sync** | `lib/supabase/sync.ts` | Per-set + block-complete → `performance_logs`; finish → **local** recalibrate |
 | **Backend** | **Supabase** | Postgres · Auth · RLS · catalog tables · `daily_protocols` cache |
 | **Edge (legacy / optional)** | `generate_weekly_microcycle` → `generate_daily_protocol` | Deterministic by default; LLM only if `HEAD_COACH_USE_LLM=true` |
+| **Deploy (Vercel)** | `npm run build` → `dist/` SPA | **Web-only** — no iOS/Android bundle in CI |
+
+### Vercel / web export (strict)
+
+| File | Contract |
+|------|----------|
+| `package.json` | `"build": "npx expo export --platform web"` · `"web": "expo start --web"` |
+| `app.json` | `"platforms": ["web"]` only · `"web": { "bundler": "metro", "output": "single" }` · plugins: **`expo-router` only** (no `expo-secure-store` / `expo-audio` config plugins) |
+| `vercel.json` | `buildCommand` + `outputDirectory: dist` + SPA rewrite → `index.html` |
+| `metro.config.js` | `resolver.platforms = ['web', 'ios', 'android']` — `.web.ts` shims win on export |
+
+**Native shims (do not import native-only modules from shared paths):**
+
+| Module | Web | Native |
+|--------|-----|--------|
+| `lib/haptics.*` | no-op | `expo-haptics` |
+| `lib/audio/combatAudio.*` | no-op | `expo-audio` |
+| `lib/supabase/authStorage.*` | `localStorage` | `expo-secure-store` |
+
+iOS/Android blocks removed from `app.json` until native ship returns. Hermes/bin errors on Vercel = usually missing `--platform web` or native config plugins in export.
 
 ### Zustand contract (key fields)
 
@@ -165,7 +185,7 @@ Hardcoded periodization in `lib/gameplan/engine/` — **no LLM** for standard ge
 
 ## 5. Catalog — ground truth
 
-### Remote (project `motyiykvtguibjevhusd`)
+### Remote (project `<YOUR_PROJECT_REF>` — set in `.env`, never commit)
 
 | Table | Rows | Notes |
 |-------|-----:|-------|
@@ -251,6 +271,7 @@ npx supabase functions deploy generate_weekly_microcycle generate_daily_protocol
 5. Catalog cache v3 populated (`prefetchLibraryCatalogs` on Home).
 6. `OPENROUTER_API_KEY` only needed if explicitly enabling `HEAD_COACH_USE_LLM=true` on Edge.
 7. `npx tsc --noEmit` before client ship.
+8. **Vercel:** `npm run build` locally must emit `dist/index.html` + `_expo/static/*` with **zero** errors before push.
 
 ---
 

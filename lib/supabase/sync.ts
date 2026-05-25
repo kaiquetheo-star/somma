@@ -11,6 +11,7 @@ import type { DailyGameplan } from '@/types/gameplan';
 import type { FocusPreference, EquipmentTag, UserStats } from '@/store/useSommaStore';
 import type { BiologicalProfile } from '@/types/biological';
 import type { PerformanceLogEntry } from '@/types/performance';
+import { effectiveRpeFromSet } from '@/lib/physics/loadTelemetry';
 import type { IronSetLog, PerformanceQueueItem } from '@/types/performance';
 
 const UUID_RE =
@@ -33,6 +34,8 @@ function mapIronSetQueueItemToRow(userId: string, item: PerformanceQueueItem) {
   const input = item.input;
   if (!set) return null;
 
+  const effectiveRpe = effectiveRpeFromSet(set);
+
   return {
     user_id: userId,
     pillar: 'iron' as const,
@@ -40,12 +43,13 @@ function mapIronSetQueueItemToRow(userId: string, item: PerformanceQueueItem) {
     block_id: input.block_id,
     weight_used: set.weight_kg,
     reps_completed: set.reps,
-    rpe_score: null,
+    rpe_score: effectiveRpe,
     actual_rest_seconds: set.rest_seconds_used,
     volume: set.weight_kg > 0 ? set.weight_kg * set.reps : set.reps,
     payload: {
       sync_kind: 'iron_set',
-      target_rir: input.target_rir ?? null,
+      target_rir: input.target_rir ?? set.target_rir ?? null,
+      reported_rir: set.reported_rir ?? set.rir ?? null,
       iron: {
         exercise_id: input.exercise_id,
         sets: [set],
@@ -77,6 +81,7 @@ function mapQueueItemToRow(userId: string, item: PerformanceQueueItem) {
       weight_used = lastSet.weight_kg;
       reps_completed = lastSet.reps;
       actual_rest_seconds = lastSet.rest_seconds_used;
+      rpe_score = effectiveRpeFromSet(lastSet) ?? rpe_score;
     }
     volume = session.iron.sets.reduce(
       (sum, set) => sum + (set.weight_kg > 0 ? set.weight_kg * set.reps : set.reps),
@@ -120,10 +125,20 @@ export async function insertPerformanceQueueRows(
   const supabase = getSupabase();
   if (!supabase) return { insertedCount: 0, userId: null };
 
-  const {
-    data: { session },
-    error: sessionError,
-  } = await supabase.auth.getSession();
+  let session: { user: { id: string } } | null = null;
+  let sessionError: { message: string } | null = null;
+
+  try {
+    const result = await supabase.auth.getSession();
+    session = result.data.session;
+    sessionError = result.error;
+  } catch (err) {
+    console.warn(
+      '[SOMMA] auth.getSession threw:',
+      err instanceof Error ? err.message : err,
+    );
+    return { insertedCount: 0, userId: null };
+  }
 
   if (sessionError || !session?.user?.id) {
     console.warn('[SOMMA] Performance sync skipped — no session');
@@ -137,14 +152,22 @@ export async function insertPerformanceQueueRows(
 
   if (rows.length === 0) return { insertedCount: 0, userId };
 
-  const { error: insertError } = await supabase.from('performance_logs').insert(rows);
+  try {
+    const { error: insertError } = await supabase.from('performance_logs').insert(rows);
 
-  if (insertError) {
-    console.warn('[SOMMA] performance_logs insert failed:', insertError.message);
+    if (insertError) {
+      console.warn('[SOMMA] performance_logs insert failed:', insertError.message);
+      return { insertedCount: 0, userId };
+    }
+
+    return { insertedCount: rows.length, userId };
+  } catch (err) {
+    console.warn(
+      '[SOMMA] performance_logs insert threw:',
+      err instanceof Error ? err.message : err,
+    );
     return { insertedCount: 0, userId };
   }
-
-  return { insertedCount: rows.length, userId };
 }
 
 /** Fire-and-forget single set sync — powers the E1RM engine between block completions. */

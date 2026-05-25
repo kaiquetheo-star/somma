@@ -3,7 +3,9 @@ import { useEffect, useRef } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { LoadingFallback } from '@/components/routing/LoadingFallback';
 import { completionFromParams } from '@/hooks/useWorkoutNavigation';
+import { useStoreHydrated } from '@/hooks/useStoreHydrated';
 import { MICROCYCLE_DAY_LABELS } from '@/lib/gameplan/microcycleWeek';
 import { useSommaStore } from '@/store/useSommaStore';
 
@@ -69,6 +71,7 @@ export default function WorkoutSummaryScreen() {
     restSeconds?: string;
   }>();
 
+  const storeHydrated = useStoreHydrated();
   const summary = useSommaStore((state) => state.lastWorkoutSummary);
   const prepareWorkoutSummary = useSommaStore((state) => state.prepareWorkoutSummary);
   const completeWorkout = useSommaStore((state) => state.completeWorkout);
@@ -95,6 +98,10 @@ export default function WorkoutSummaryScreen() {
     summary != null
       ? (MICROCYCLE_DAY_LABELS[summary.day_index - 1] ?? `Day ${summary.day_index}`)
       : 'Today';
+
+  if (!storeHydrated) {
+    return <LoadingFallback message="Preparing session summary…" eyebrow="Ascension" />;
+  }
 
   return (
     <View className="flex-1 bg-[#0A0E0C]">
@@ -125,8 +132,8 @@ export default function WorkoutSummaryScreen() {
               value={summary ? String(summary.cns_fatigue_total) : '—'}
               detail="Sum of catalog CNS cost · Iron sets + Combat round complexity"
             />
-            {summary?.e1rm_unlocks.length ? (
-              summary.e1rm_unlocks.map((unlock) => (
+            {(summary?.e1rm_unlocks?.length ?? 0) > 0 ? (
+              (summary?.e1rm_unlocks ?? []).map((unlock) => (
                 <MetricCard
                   key={unlock.exercise_id}
                   label="E1RM unlocked"

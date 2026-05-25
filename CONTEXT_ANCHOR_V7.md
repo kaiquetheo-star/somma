@@ -117,7 +117,7 @@ supabase/migrations/{001..020}_*.sql       # 020 = no-op (017 supersedes elite s
 
 `map_merged_steps_to_phase_keys()` maps step count → phase keys (`setup`, `eccentric`, `concentric`, `safety`, `regression`). Always retains `merged_steps`, `sources`, optional `summary`.
 
-### Remote catalog (project `motyiykvtguibjevhusd`)
+### Remote catalog (project `<YOUR_PROJECT_REF>` — set in `.env`, never commit)
 
 | Table | Rows | Notes |
 |-------|-----:|-------|

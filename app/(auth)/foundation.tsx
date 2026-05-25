@@ -177,6 +177,7 @@ export default function FoundationScanScreen() {
           className="mt-8 flex-1"
           showsVerticalScrollIndicator={false}
           contentContainerClassName="gap-3 pb-6"
+          keyboardShouldPersistTaps="handled"
         >
           {renderStepContent()}
         </ScrollView>

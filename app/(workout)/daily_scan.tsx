@@ -1,10 +1,12 @@
 import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { LoadingFallback } from '@/components/routing/LoadingFallback';
 import { WORKOUT_ROUTES } from '@/constants/workout';
-import type { GameplanBlock } from '@/types/gameplan';
+import { useStoreHydrated } from '@/hooks/useStoreHydrated';
+import type { GameplanBlock, WorkoutPillar } from '@/types/gameplan';
 import { useSommaStore } from '@/store/useSommaStore';
 
 const OBSIDIAN = '#0A0E0C';
@@ -20,14 +22,23 @@ export default function DailyReadinessScanScreen() {
     pillar?: string;
   }>();
 
+  const hydrated = useStoreHydrated();
   const applySubjectiveReadiness = useSommaStore((state) => state.applySubjectiveReadiness);
   const [score, setScore] = useState<number | null>(null);
 
-  const pillar = params.pillar as GameplanBlock['pillar'] | undefined;
+  const pillar = params.pillar as WorkoutPillar | undefined;
   const route =
     pillar && pillar in WORKOUT_ROUTES
-      ? WORKOUT_ROUTES[pillar as keyof typeof WORKOUT_ROUTES]
+      ? WORKOUT_ROUTES[pillar]
       : null;
+
+  const paramsValid = Boolean(params.blockId && route);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    if (!params.blockId || route) return;
+    router.replace('/(tabs)/home');
+  }, [hydrated, params.blockId, route, router]);
 
   const readinessHint = useMemo(() => {
     if (score == null) return null;
@@ -46,9 +57,23 @@ export default function DailyReadinessScanScreen() {
       params: {
         blockId: params.blockId,
         title: params.title ?? '',
+        pillar: pillar ?? '',
       },
     } as Href);
   };
+
+  if (!hydrated) {
+    return <LoadingFallback message="Restoring readiness state…" eyebrow="Clinical Readiness" />;
+  }
+
+  if (!paramsValid) {
+    return (
+      <LoadingFallback
+        message="Invalid workout link — returning to Daily Command…"
+        eyebrow="Clinical Readiness"
+      />
+    );
+  }
 
   return (
     <SafeAreaView className="flex-1" style={{ backgroundColor: OBSIDIAN }}>

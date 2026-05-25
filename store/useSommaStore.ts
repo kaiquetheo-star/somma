@@ -102,12 +102,13 @@ function mergeBlockStatuses(
 
   return microcycle.map((day) => {
     const previousDay = previous.find((entry) => entry.day_index === day.day_index);
+    const blocks = day.blocks ?? [];
     return {
       ...day,
       is_completed: previousDay?.is_completed ?? day.is_completed,
-      blocks: day.blocks.map((block) => {
+      blocks: blocks.map((block) => {
         const wasCompleted = previous
-          .flatMap((prevDay) => prevDay.blocks)
+          .flatMap((prevDay) => prevDay.blocks ?? [])
           .find((prev) => prev.id === block.id)?.status;
         return wasCompleted === 'completed' ? { ...block, status: 'completed' as const } : block;
       }),
@@ -132,8 +133,9 @@ export function isSelectedDayProtocolComplete(state: {
   selectedDayIndex: number;
 }): boolean {
   const day = getMicrocycleDay(state.weeklyMicrocycle, state.selectedDayIndex);
-  if (!day || day.is_rest_day || day.blocks.length === 0) return false;
-  return day.blocks.every((block) => block.status === 'completed');
+  const blocks = day?.blocks ?? [];
+  if (!day || day.is_rest_day || blocks.length === 0) return false;
+  return blocks.every((block) => block.status === 'completed');
 }
 
 function markDayCompletedIfReady(
@@ -144,8 +146,9 @@ function markDayCompletedIfReady(
 
   return microcycle.map((day) => {
     if (day.day_index !== dayIndex || day.is_rest_day) return day;
+    const blocks = day.blocks ?? [];
     const allBlocksDone =
-      day.blocks.length > 0 && day.blocks.every((block) => block.status === 'completed');
+      blocks.length > 0 && blocks.every((block) => block.status === 'completed');
     return allBlocksDone ? { ...day, is_completed: true } : day;
   });
 }
@@ -455,13 +458,18 @@ export const useSommaStore = create<SommaState>()(
                 ? error.message
                 : 'Neural link failed — could not reach Head Coach';
             console.error('[SOMMA] fetchDailyGameplanAsync failed:', message, error);
+            const current = get();
             set({
               gameplan_loading: false,
               gameplan_error: message,
-              weeklyMicrocycle: null,
-              protocolDate: null,
-              weekStartDate: null,
-              protocolGeneratedAt: null,
+              ...(current.weeklyMicrocycle
+                ? {}
+                : {
+                    weeklyMicrocycle: null,
+                    protocolDate: null,
+                    weekStartDate: null,
+                    protocolGeneratedAt: null,
+                  }),
             });
             return;
           }
@@ -490,7 +498,7 @@ export const useSommaStore = create<SommaState>()(
           return {
             weeklyMicrocycle: state.weeklyMicrocycle.map((day) => ({
               ...day,
-              blocks: day.blocks.map((block) =>
+              blocks: (day.blocks ?? []).map((block) =>
                 block.id === blockId ? { ...block, status } : block,
               ),
             })),
@@ -503,7 +511,7 @@ export const useSommaStore = create<SommaState>()(
 
           const withBlockComplete = state.weeklyMicrocycle.map((day) => ({
             ...day,
-            blocks: day.blocks.map((block) =>
+            blocks: (day.blocks ?? []).map((block) =>
               block.id === blockId ? { ...block, status: 'completed' as const } : block,
             ),
           }));
@@ -866,6 +874,13 @@ export const useSommaStore = create<SommaState>()(
           currentGameplan?: DailyGameplan | null;
           daily_gameplan?: DailyGameplan | null;
         };
+
+        if (!state.performance_logs) {
+          state.performance_logs = [];
+        }
+        if (!state.performanceQueue) {
+          state.performanceQueue = [];
+        }
 
         if (!state.weeklyMicrocycle) {
           const legacyPlan = legacy.currentGameplan ?? legacy.daily_gameplan;

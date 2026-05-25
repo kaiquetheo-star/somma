@@ -15,11 +15,15 @@ export function PerformanceSyncBridge() {
 
     const handleAppState = (next: AppStateStatus) => {
       if (next === 'active') {
-        void flushPerformanceQueue();
+        void flushPerformanceQueue().catch((err) => {
+          console.warn('[SOMMA] Performance queue flush failed:', err);
+        });
       }
     };
 
-    void flushPerformanceQueue();
+    void flushPerformanceQueue().catch((err) => {
+      console.warn('[SOMMA] Performance queue flush failed:', err);
+    });
 
     const subscription = AppState.addEventListener('change', handleAppState);
     return () => subscription.remove();
