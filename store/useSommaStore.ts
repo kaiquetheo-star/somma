@@ -408,6 +408,7 @@ export const useSommaStore = create<SommaState>()(
         const state = get();
         const focus = state.user_foundation.focus_preference;
         if (!focus) return;
+        if (!isBiologicalProfileComplete(state.user_biological)) return;
 
         set({ gameplan_loading: true, gameplan_error: null });
 
