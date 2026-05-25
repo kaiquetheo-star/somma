@@ -310,15 +310,17 @@ export default function IronModeScreen() {
       set: entry,
       target_rir: exercise.target_rir,
     });
-    await hapticSetLogged();
 
+    // Close the RIR gate and start the rest timer immediately after logging —
+    // before the haptic await so the UI responds without delay.
     if (currentSet >= totalSets) {
       setPhase('done');
-      return;
+    } else {
+      setPhase('resting');
+      start(exercise.rest_seconds);
     }
 
-    setPhase('resting');
-    start(exercise.rest_seconds);
+    await hapticSetLogged();
   };
 
   const handleConfirmRir = () => {
