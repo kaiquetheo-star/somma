@@ -2,6 +2,7 @@
 import {
   estimateBestE1RMFromLogs,
   targetWeightFromE1RM,
+  targetWeightFromPassport,
   type PerformanceLogSample,
 } from '@/lib/physics/rmCalculator';
 import {
@@ -243,6 +244,7 @@ function prescribeIronExercise(
   weeklyVolumeMap: Map<string, number>,
   equipment: EquipmentTag[],
   goalIron: string | null,
+  biological: BiologicalProfile,
   clinicalReview: ClinicalExitInterview | null = null,
   targetArchetype: TargetArchetype | null = null,
 ): IronExercisePrescription {
@@ -266,8 +268,11 @@ function prescribeIronExercise(
     targetWeight = Math.round(last.weight_used * 10) / 10;
     note = `Last logged ${targetWeight} kg — calibrate @ ${targetRir} RIR`;
   } else {
-    targetWeight = null;
-    note = 'Calibrate first set @ prescribed RIR';
+    targetWeight = meta ? targetWeightFromPassport(biological, meta) : null;
+    note =
+      targetWeight != null
+        ? `Passport baseline ${targetWeight} kg — recalibrates after first logged set`
+        : 'Calibrate first set @ prescribed RIR';
   }
 
   if (last?.weight_used != null && last.rpe_score != null) {
@@ -340,6 +345,7 @@ export function buildIronBlock(
   autoreg: IronAutoregulationState,
   goalIron: string | null,
   pillarTime: PillarTimeBudget,
+  biological: BiologicalProfile,
   mesocycleWeek = 1,
   clinicalReview: ClinicalExitInterview | null = null,
   targetArchetype: TargetArchetype | null = null,
@@ -390,6 +396,7 @@ export function buildIronBlock(
       weeklyVolumeMap,
       equipment,
       goalIron,
+      biological,
       clinicalReview,
       targetArchetype,
     ),

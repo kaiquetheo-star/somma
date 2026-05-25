@@ -185,6 +185,7 @@ export async function generateDeterministicGameplan(
         autoreg,
         input.biological.goal_iron,
         pillarTime,
+        input.biological,
         mesocycleWeek,
         input.biological.clinical_exit_interview,
         input.biological.target_archetype,

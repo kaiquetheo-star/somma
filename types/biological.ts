@@ -2,6 +2,7 @@ import type { ClinicalExitInterview } from '@/types/clinical';
 
 /** Shape archetype for Natural Target Timeline steering */
 export type TargetArchetype = 'AESTHETIC_V_TAPER' | 'POWERBUILDER_BULK' | 'LEAN_RECOMP';
+export type TrainingExperienceLevel = 'beginner' | 'intermediate' | 'advanced';
 
 export const TARGET_ARCHETYPE_OPTIONS: { id: TargetArchetype; label: string; description: string }[] = [
   { id: 'AESTHETIC_V_TAPER', label: 'Aesthetic V-Taper', description: 'Wide shoulders, narrow waist — delt/lat priority' },
@@ -23,6 +24,8 @@ export interface BiologicalProfile {
   goal_spirit: string | null;
   /** Weekly availability for microcycle planning (1–7) */
   training_days_per_week: number | null;
+  /** Self-reported lifting experience for cold-start load safety. */
+  experience_level: TrainingExperienceLevel | null;
   /** Typical session duration per pillar (minutes) */
   available_time_iron: number | null;
   available_time_combat: number | null;
@@ -109,6 +112,7 @@ export const initialBiologicalProfile: BiologicalProfile = {
   goal_flow: null,
   goal_spirit: null,
   training_days_per_week: DEFAULT_TRAINING_DAYS_PER_WEEK,
+  experience_level: null,
   available_time_iron: DEFAULT_AVAILABLE_TIME_IRON,
   available_time_combat: DEFAULT_AVAILABLE_TIME_COMBAT,
   available_time_spirit: DEFAULT_AVAILABLE_TIME_SPIRIT,

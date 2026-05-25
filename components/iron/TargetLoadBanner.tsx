@@ -3,8 +3,8 @@ import { Text, View } from 'react-native';
 interface TargetLoadBannerProps {
   targetKg: number | null;
   repRange?: string;
-  /** Whether load came from Head Coach prescription vs live E1RM query */
-  source?: 'prescription' | 'e1rm';
+  /** Whether load came from Head Coach prescription, live E1RM, or Passport cold-start math */
+  source?: 'prescription' | 'e1rm' | 'passport';
   /** One-line autoreg hint from last reported RIR */
   loadHint?: string | null;
 }
@@ -50,6 +50,11 @@ export function TargetLoadBanner({ targetKg, repRange, source, loadHint }: Targe
       {source === 'e1rm' ? (
         <Text className="mt-2 font-body text-[10px] uppercase tracking-[0.25em] text-[#6B7568]">
           Calibrated from your 3-week strength profile
+        </Text>
+      ) : null}
+      {source === 'passport' ? (
+        <Text className="mt-2 font-body text-[10px] uppercase tracking-[0.25em] text-[#6B7568]">
+          Passport-safe starter load · recalibrates after your first logged set
         </Text>
       ) : null}
       {loadHint ? (

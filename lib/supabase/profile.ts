@@ -63,6 +63,7 @@ function mapProfileBiology(row: Record<string, unknown> | null): BiologicalProfi
       goal_flow: null,
       goal_spirit: null,
       training_days_per_week: null,
+      experience_level: null,
       available_time_iron: null,
       available_time_combat: null,
       available_time_spirit: null,
@@ -103,6 +104,12 @@ function mapProfileBiology(row: Record<string, unknown> | null): BiologicalProfi
     training_days_per_week: Number.isFinite(training_days_per_week)
       ? training_days_per_week
       : null,
+    experience_level:
+      row.experience_level === 'beginner' ||
+      row.experience_level === 'intermediate' ||
+      row.experience_level === 'advanced'
+        ? row.experience_level
+        : null,
     available_time_iron: clampPillarTimeMinutes(
       row.available_time_iron != null ? Number(row.available_time_iron) : null,
       15,

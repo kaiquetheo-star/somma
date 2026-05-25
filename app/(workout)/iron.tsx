@@ -28,7 +28,7 @@ import { resolveIronExerciseView } from '@/lib/iron/resolveExercise';
 import { resolvePrimaryInstruction } from '@/lib/iron/instructionCues';
 import { hapticSetLogged } from '@/lib/haptics';
 import { formatExerciseProgressionHint } from '@/lib/physics/loadTelemetry';
-import { getTargetWeightFromLogs } from '@/lib/physics/rmCalculator';
+import { getTargetWeightFromLogs, targetWeightFromPassport } from '@/lib/physics/rmCalculator';
 import type { IronExerciseBiomechanics } from '@/types/catalog';
 import type { IronExercisePrescription } from '@/types/gameplan';
 import type { IronSetLog } from '@/types/performance';
@@ -54,12 +54,21 @@ function biomechanicsFromLibrary(library: LibraryExercise | null): IronExerciseB
   };
 }
 
-function stubPrescriptionFromTemplate(template: IronExerciseTemplate): IronExercisePrescription {
+function stubPrescriptionFromTemplate(
+  template: IronExerciseTemplate,
+  biological: ReturnType<typeof useSommaStore.getState>['user_biological'],
+): IronExercisePrescription {
+  const targetWeightKg = targetWeightFromPassport(biological, {
+    id: template.id,
+    name: template.name,
+    equipment_required: template.equipment_required,
+  });
+
   return {
     exercise_id: template.id,
     target_sets: template.total_sets,
     target_reps: template.target_reps,
-    target_weight_kg: template.target_weight_kg,
+    target_weight_kg: targetWeightKg,
     target_rep_range: `${template.target_reps - 2}-${template.target_reps} @ 2 RIR`,
     target_rir: 2,
     rest_seconds: template.rest_seconds,
@@ -74,6 +83,7 @@ export default function IronModeScreen() {
   const { activeBlock, isReady, waitingForBlock } = useWorkoutBlockReady(blockId);
   const { finishBlock } = useWorkoutNavigation();
   const equipment = useSommaStore((state) => state.user_environment.available_equipment);
+  const userBiological = useSommaStore((state) => state.user_biological);
   const goalIron = useSommaStore((state) => state.user_biological.goal_iron);
   const appendIronSession = useSommaStore((state) => state.appendIronSession);
   const logIronSet = useSommaStore((state) => state.logIronSet);
@@ -104,12 +114,13 @@ export default function IronModeScreen() {
 
   const exerciseQueue = useMemo(() => {
     if (!prescriptions.length) {
+      const fallbackPrescription = stubPrescriptionFromTemplate(localFallback, userBiological);
       return [
         resolveIronExerciseView({
-          prescription: stubPrescriptionFromTemplate(localFallback),
+          prescription: fallbackPrescription,
           library: null,
           fallbackName: localFallback.name,
-          fallbackWeight: localFallback.target_weight_kg,
+          fallbackWeight: fallbackPrescription.target_weight_kg ?? 0,
           fallbackReps: localFallback.target_reps,
           fallbackSets: localFallback.total_sets,
           libraryCatalog: catalog,
@@ -125,7 +136,7 @@ export default function IronModeScreen() {
         prescription,
         library: libraryRow,
         fallbackName: localFallback.name,
-        fallbackWeight: prescription.target_weight_kg ?? localFallback.target_weight_kg,
+        fallbackWeight: prescription.target_weight_kg ?? 0,
         fallbackReps: prescription.target_reps,
         fallbackSets: prescription.target_sets,
         exerciseIdOverride: overrideId,
@@ -136,6 +147,7 @@ export default function IronModeScreen() {
     prescriptions,
     catalog,
     localFallback,
+    userBiological,
     adaptedOverrideByIndex,
   ]);
 
@@ -145,14 +157,29 @@ export default function IronModeScreen() {
     [catalog, exercise?.exercise_id],
   );
   const totalSets = exercise?.target_sets ?? 4;
-  const isBodyweight = (exercise?.target_weight_kg ?? weight) <= 0;
+  const activePrescription = prescriptions[exerciseIndex];
+  const prescriptionIsPassportBaseline =
+    activePrescription?.progression_note?.includes('Passport baseline') ?? false;
 
   const prescribedTargetKg = useMemo(() => {
-    const raw = prescriptions?.[exerciseIndex]?.target_weight_kg ?? exercise?.target_weight_kg;
+    const raw = prescriptions.length ? activePrescription?.target_weight_kg : null;
     return raw != null && raw > 0 ? raw : null;
-  }, [prescriptions, exerciseIndex, exercise?.target_weight_kg]);
+  }, [prescriptions.length, activePrescription?.target_weight_kg]);
 
-  const targetLoadKg = prescribedTargetKg ?? e1rmTargetWeight;
+  const passportTargetKg = useMemo(() => {
+    if (!exercise) return null;
+    return targetWeightFromPassport(userBiological, activeLibrary ?? {
+      id: exercise.exercise_id,
+      name: exercise.name,
+    });
+  }, [
+    activeLibrary,
+    exercise,
+    userBiological,
+  ]);
+
+  const targetLoadKg = e1rmTargetWeight ?? prescribedTargetKg ?? passportTargetKg;
+  const isBodyweight = (targetLoadKg ?? exercise?.target_weight_kg ?? weight) <= 0;
   const loadHint = useMemo(() => {
     if (!exercise?.exercise_id) return null;
     return formatExerciseProgressionHint(
@@ -162,19 +189,16 @@ export default function IronModeScreen() {
     );
   }, [performanceLogs, exercise?.exercise_id, exercise?.target_rir]);
 
-  const targetLoadSource: 'prescription' | 'e1rm' | undefined = prescribedTargetKg
-    ? 'prescription'
-    : e1rmTargetWeight
-      ? 'e1rm'
-      : undefined;
+  const targetLoadSource: 'prescription' | 'e1rm' | 'passport' | undefined = e1rmTargetWeight
+    ? 'e1rm'
+    : prescribedTargetKg && !prescriptionIsPassportBaseline
+      ? 'prescription'
+      : prescribedTargetKg || passportTargetKg
+        ? 'passport'
+        : undefined;
 
   useEffect(() => {
     if (!exercise?.exercise_id) {
-      setE1rmTargetWeight(null);
-      return;
-    }
-
-    if (prescribedTargetKg != null) {
       setE1rmTargetWeight(null);
       return;
     }
@@ -193,7 +217,6 @@ export default function IronModeScreen() {
     exercise?.target_reps,
     exercise?.target_rir,
     goalIron,
-    prescribedTargetKg,
   ]);
 
   useEffect(() => {
