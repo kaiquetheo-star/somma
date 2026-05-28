@@ -21,13 +21,15 @@ export function InstructionPanel({
   const text = primary?.text ?? emptyFallback;
 
   return (
-    <View className="overflow-hidden rounded-2xl border border-matte-gold/25 bg-matte-gold/[0.05] px-5 py-4">
-      <Text className="font-body text-[10px] uppercase tracking-[0.4em] text-matte-gold/85">
+    <View className="min-w-0 overflow-hidden rounded-2xl border border-matte-gold/25 bg-matte-gold/[0.05] px-5 py-4">
+      <Text className="flex-shrink whitespace-normal break-words font-body text-[10px] uppercase leading-5 tracking-[0.32em] text-matte-gold/85">
         {label}
       </Text>
-      <Text className="mt-3 font-body text-base leading-7 text-[#E8E4DC]">{text}</Text>
+      <Text className="mt-3 flex-shrink whitespace-normal break-words font-body text-base leading-7 text-[#E8E4DC]">
+        {text}
+      </Text>
       {!primary ? (
-        <Text className="mt-2 font-body text-xs leading-5 text-[#6B7568]">
+        <Text className="mt-2 flex-shrink whitespace-normal break-words font-body text-xs leading-5 text-[#6B7568]">
           Catalog cue pending — using default iron command copy.
         </Text>
       ) : null}

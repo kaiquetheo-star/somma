@@ -63,6 +63,7 @@ function mapProfileBiology(row: Record<string, unknown> | null): BiologicalProfi
       goal_flow: null,
       goal_spirit: null,
       training_days_per_week: null,
+      experience_level: null,
       available_time_iron: null,
       available_time_combat: null,
       available_time_spirit: null,
@@ -72,6 +73,8 @@ function mapProfileBiology(row: Record<string, unknown> | null): BiologicalProfi
       mesocycle_week: null,
       cns_fatigue_score: null,
       clinical_exit_interview: null,
+      current_body_fat_estimate: null,
+      target_archetype: null,
     };
   }
 
@@ -101,6 +104,12 @@ function mapProfileBiology(row: Record<string, unknown> | null): BiologicalProfi
     training_days_per_week: Number.isFinite(training_days_per_week)
       ? training_days_per_week
       : null,
+    experience_level:
+      row.experience_level === 'beginner' ||
+      row.experience_level === 'intermediate' ||
+      row.experience_level === 'advanced'
+        ? row.experience_level
+        : null,
     available_time_iron: clampPillarTimeMinutes(
       row.available_time_iron != null ? Number(row.available_time_iron) : null,
       15,
@@ -138,6 +147,13 @@ function mapProfileBiology(row: Record<string, unknown> | null): BiologicalProfi
       row.cns_fatigue_score != null ? Number(row.cns_fatigue_score) : null,
     ),
     clinical_exit_interview: null,
+    current_body_fat_estimate:
+      row.current_body_fat_estimate != null ? Number(row.current_body_fat_estimate) : null,
+    target_archetype:
+      typeof row.target_archetype === 'string' &&
+      ['AESTHETIC_V_TAPER', 'POWERBUILDER_BULK', 'LEAN_RECOMP'].includes(row.target_archetype)
+        ? (row.target_archetype as BiologicalProfile['target_archetype'])
+        : null,
   };
 }
 

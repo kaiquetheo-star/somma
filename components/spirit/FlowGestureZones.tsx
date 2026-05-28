@@ -50,7 +50,7 @@ export function FlowGestureZones({
 
 const styles = StyleSheet.create({
   root: {
-    flex: 1,
+    position: 'relative',
   },
   leftZone: {
     position: 'absolute',

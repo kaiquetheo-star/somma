@@ -2,6 +2,7 @@
 import {
   estimateBestE1RMFromLogs,
   targetWeightFromE1RM,
+  targetWeightFromPassport,
   type PerformanceLogSample,
 } from '@/lib/physics/rmCalculator';
 import {
@@ -28,6 +29,9 @@ import {
 } from '@/lib/gameplan/engine/clinicalLaws';
 import {
   applyHypertrophyVolumeGuardrail,
+  archetypeExerciseCountDelta,
+  archetypeRirDelta,
+  archetypeVolumeCapAdjustment,
   buildWeeklyVolumeMap,
   equipmentMatches,
   injectPrerequisiteIronExercises,
@@ -37,6 +41,8 @@ import {
 } from '@/lib/gameplan/engine/periodization';
 import { adjustTargetWeightForMonth2 } from '@/lib/gameplan/engine/progression';
 import type { ClinicalExitInterview } from '@/types/clinical';
+import type { TargetArchetype } from '@/types/biological';
+import { glycogenMrvClampFactor } from '@/lib/physics/nutritionMath';
 import type { EnginePerformanceRow } from '@/lib/gameplan/engine/performanceLogs';
 import type { LibraryCombatCombo, LibraryExercise, LibraryFlowSpiritSession } from '@/types/catalog';
 import type {
@@ -238,14 +244,17 @@ function prescribeIronExercise(
   weeklyVolumeMap: Map<string, number>,
   equipment: EquipmentTag[],
   goalIron: string | null,
+  biological: BiologicalProfile,
   clinicalReview: ClinicalExitInterview | null = null,
+  targetArchetype: TargetArchetype | null = null,
 ): IronExercisePrescription {
   const meta = catalog.find((row) => row.id === exerciseId);
   const last = ironLogs3w.find((log) => log.exercise_id === exerciseId);
   const progression = mesocycle?.progression_recommendation ?? 'maintain';
   const samples = toPerformanceSamples(ironLogs3w);
 
-  let targetRir = autoreg.poor_recovery ? 3 : 2;
+  const rirDelta = archetypeRirDelta(targetArchetype);
+  let targetRir = autoreg.poor_recovery ? 3 : Math.max(1, 2 + rirDelta);
   if (progression === 'deload') targetRir = 4;
   let targetReps = meta?.default_reps ?? 10;
   let targetWeight: number | null = null;
@@ -259,8 +268,11 @@ function prescribeIronExercise(
     targetWeight = Math.round(last.weight_used * 10) / 10;
     note = `Last logged ${targetWeight} kg — calibrate @ ${targetRir} RIR`;
   } else {
-    targetWeight = null;
-    note = 'Calibrate first set @ prescribed RIR';
+    targetWeight = meta ? targetWeightFromPassport(biological, meta) : null;
+    note =
+      targetWeight != null
+        ? `Passport baseline ${targetWeight} kg — recalibrates after first logged set`
+        : 'Calibrate first set @ prescribed RIR';
   }
 
   if (last?.weight_used != null && last.rpe_score != null) {
@@ -278,10 +290,19 @@ function prescribeIronExercise(
   const hi = meta?.default_reps ?? 10;
   const lo = Math.max(6, hi - 2);
   let sets = meta?.default_sets ?? 4;
+  const archetypeBonus = archetypeVolumeCapAdjustment(targetArchetype, meta?.primary_muscle ?? null);
+  if (archetypeBonus > 0) {
+    sets = Math.min(sets + 1, 6);
+  }
   if (autoreg.poor_recovery && (meta?.cns_fatigue_cost ?? 0) >= HIGH_CNS_SWAP_THRESHOLD) {
     sets = Math.max(2, sets - 1);
   }
-  const volumeCap = applyWeeklyVolumeSetCap(sets, meta?.primary_muscle ?? null, weeklyVolumeMap);
+  const boostedVolumeMap = new Map(weeklyVolumeMap);
+  if (archetypeBonus > 0 && meta?.primary_muscle) {
+    const current = boostedVolumeMap.get(meta.primary_muscle) ?? 0;
+    boostedVolumeMap.set(meta.primary_muscle, Math.max(0, current - archetypeBonus));
+  }
+  const volumeCap = applyWeeklyVolumeSetCap(sets, meta?.primary_muscle ?? null, boostedVolumeMap);
   sets = volumeCap.sets;
 
   if (clinicalReview && targetWeight != null) {
@@ -324,12 +345,17 @@ export function buildIronBlock(
   autoreg: IronAutoregulationState,
   goalIron: string | null,
   pillarTime: PillarTimeBudget,
+  biological: BiologicalProfile,
   mesocycleWeek = 1,
   clinicalReview: ClinicalExitInterview | null = null,
+  targetArchetype: TargetArchetype | null = null,
+  glycogenDepleted = false,
 ): GameplanBlock {
   const isDeload = isDeloadMesocycleWeek(mesocycleWeek);
-  let targetCount = targetIronExerciseCount(pillarTime.available_time_iron, goalIron);
+  let targetCount = targetIronExerciseCount(pillarTime.available_time_iron, goalIron) + archetypeExerciseCountDelta(targetArchetype);
+  targetCount = Math.max(2, targetCount);
   if (isDeload) targetCount = Math.min(targetCount, 4);
+  const mrvClamp = glycogenMrvClampFactor(glycogenDepleted);
 
   let routineIds = selectExercisesForSplit(
     focusLabel,
@@ -370,11 +396,20 @@ export function buildIronBlock(
       weeklyVolumeMap,
       equipment,
       goalIron,
+      biological,
       clinicalReview,
+      targetArchetype,
     ),
   );
   if (isDeload) {
     exercises = exercises.map((row) => applyDeloadToIronExercise(row));
+  }
+
+  if (mrvClamp < 1) {
+    exercises = exercises.map((row) => ({
+      ...row,
+      target_sets: Math.max(2, Math.round(row.target_sets * mrvClamp)),
+    }));
   }
 
   exercises = sortIronExercises(exercises, catalog, prerequisiteSlugs);

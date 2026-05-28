@@ -25,18 +25,20 @@ export function AttunementOrbsPanel({ stats, biological, gameplan }: AttunementO
       : 'Pillar focus radiating from your Foundation Scan';
 
   return (
-    <View className="w-full max-w-sm overflow-hidden rounded-3xl border border-white/10 bg-moss-900/40 px-6 py-6">
-      <Text className="text-center font-body text-[10px] uppercase tracking-[0.35em] text-[#6B7568]">
+    <View className="min-w-0 w-full max-w-sm overflow-hidden rounded-3xl border border-white/10 bg-moss-900/40 px-5 py-6">
+      <Text className="text-center font-body text-[10px] uppercase leading-5 tracking-[0.3em] text-[#6B7568]">
         Attunement Orbs
       </Text>
-      <Text className="mt-1 text-center font-body text-xs text-[#8A9488]">{subtitle}</Text>
+      <Text className="mt-1 flex-shrink whitespace-normal break-words text-center font-body text-xs leading-5 text-[#8A9488]">
+        {subtitle}
+      </Text>
 
       <View className="mt-4 items-center">
         <AttunementOrbs stats={stats} completedPillars={completedPillars} />
       </View>
 
       {showBiological ? (
-        <Text className="mt-2 text-center font-body text-[10px] uppercase tracking-[0.25em] text-[#6B7568]">
+        <Text className="mt-2 flex-shrink whitespace-normal break-words text-center font-body text-[10px] uppercase leading-5 tracking-[0.2em] text-[#6B7568]">
           {biological.weight_kg} kg · stress {biological.baseline_stress_level}/10
         </Text>
       ) : null}

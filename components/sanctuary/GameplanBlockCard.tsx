@@ -43,7 +43,7 @@ export function GameplanBlockCard({ block, onPress }: GameplanBlockCardProps) {
       accessibilityRole="button"
       accessibilityLabel={`Start ${block.title}`}
       accessibilityState={{ disabled: isCompleted }}
-      className={`overflow-hidden rounded-2xl border px-5 py-4 active:opacity-85 ${STATUS_STYLES[block.status]}`}
+      className={`min-w-0 overflow-hidden rounded-2xl border px-5 py-4 active:opacity-85 ${STATUS_STYLES[block.status]}`}
       style={
         block.status === 'active'
           ? {
@@ -55,17 +55,19 @@ export function GameplanBlockCard({ block, onPress }: GameplanBlockCardProps) {
           : undefined
       }
     >
-      <View className="flex-row items-start justify-between">
-        <View className="flex-1 pr-4">
-          <Text className="font-body text-[10px] uppercase tracking-[0.35em] text-[#6B7568]">
+      <View className="min-w-0 flex-row items-start gap-3">
+        <View className="min-w-0 flex-1">
+          <Text className="flex-shrink whitespace-normal break-words font-body text-[10px] uppercase leading-5 tracking-[0.28em] text-[#6B7568]">
             {block.duration_minutes} min · {block.pillar}
           </Text>
-          <Text className={`mt-2 font-display text-xl ${PILLAR_ACCENT[block.pillar]}`}>
+          <Text className={`mt-2 flex-shrink whitespace-normal break-words font-display text-xl leading-7 ${PILLAR_ACCENT[block.pillar]}`}>
             {block.title}
           </Text>
-          <Text className="mt-2 font-body text-sm leading-5 text-[#8A9488]">{previewLabel}</Text>
+          <Text className="mt-2 flex-shrink whitespace-normal break-words font-body text-sm leading-5 text-[#8A9488]">
+            {previewLabel}
+          </Text>
         </View>
-        <Text className="font-body text-lg text-matte-gold/80">
+        <Text className="shrink-0 font-body text-lg text-matte-gold/80">
           {isCompleted ? '✓' : '→'}
         </Text>
       </View>

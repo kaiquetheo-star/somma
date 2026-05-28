@@ -141,7 +141,10 @@ function acwrStatusFromRatio(
 }
 
 function ironSessionFromEntry(entry: PerformanceLogEntry): SessionLoad | null {
-  if (!entry.iron?.sets.length) return null;
+  if (!entry.iron?.sets?.length) return null;
+
+  const ts = Date.parse(entry.timestamp);
+  if (!Number.isFinite(ts)) return null;
 
   const sets = entry.iron.sets;
   const rpeSamples = sets
@@ -158,7 +161,7 @@ function ironSessionFromEntry(entry: PerformanceLogEntry): SessionLoad | null {
 
   return {
     pillar: 'iron',
-    timestamp: Date.parse(entry.timestamp),
+    timestamp: ts,
     rpe: sessionRpe,
     durationMinutes,
     workload,
@@ -167,14 +170,18 @@ function ironSessionFromEntry(entry: PerformanceLogEntry): SessionLoad | null {
 
 function combatSessionFromEntry(entry: PerformanceLogEntry): SessionLoad | null {
   if (!entry.combat) return null;
-  const rounds = entry.combat.rounds ?? [];
-  const workSeconds = rounds.reduce((sum, round) => sum + round.work_seconds, 0);
+
+  const ts = Date.parse(entry.combat.completed_at ?? entry.timestamp);
+  if (!Number.isFinite(ts)) return null;
+
+  const rounds = Array.isArray(entry.combat.rounds) ? entry.combat.rounds : [];
+  const workSeconds = rounds.reduce((sum, round) => sum + (round.work_seconds ?? 0), 0);
   const durationMinutes = Math.max(1, (workSeconds + rounds.length * 30) / 60);
   const rpe = entry.combat.rpe_score;
 
   return {
     pillar: 'combat',
-    timestamp: Date.parse(entry.combat.completed_at ?? entry.timestamp),
+    timestamp: ts,
     rpe: rpe != null && Number.isFinite(rpe) ? rpe : null,
     durationMinutes,
     workload: workSeconds > 0 ? workSeconds : rounds.length * 180,
@@ -183,10 +190,14 @@ function combatSessionFromEntry(entry: PerformanceLogEntry): SessionLoad | null 
 
 function spiritSessionFromEntry(entry: PerformanceLogEntry): SessionLoad | null {
   if (!entry.spirit) return null;
+
+  const ts = Date.parse(entry.spirit.completed_at ?? entry.timestamp);
+  if (!Number.isFinite(ts)) return null;
+
   const seconds = entry.spirit.total_seconds ?? 0;
   return {
     pillar: 'spirit',
-    timestamp: Date.parse(entry.spirit.completed_at ?? entry.timestamp),
+    timestamp: ts,
     rpe: 6,
     durationMinutes: Math.max(1, seconds / 60),
     workload: seconds,
@@ -194,17 +205,25 @@ function spiritSessionFromEntry(entry: PerformanceLogEntry): SessionLoad | null 
 }
 
 function sessionsFromLogs(entries: PerformanceLogEntry[]): SessionLoad[] {
+  if (!Array.isArray(entries) || entries.length === 0) return [];
+
   const sessions: SessionLoad[] = [];
   for (const entry of entries) {
-    if (entry.pillar === 'iron') {
-      const session = ironSessionFromEntry(entry);
-      if (session) sessions.push(session);
-    } else if (entry.pillar === 'combat') {
-      const session = combatSessionFromEntry(entry);
-      if (session) sessions.push(session);
-    } else if (entry.pillar === 'spirit') {
-      const session = spiritSessionFromEntry(entry);
-      if (session) sessions.push(session);
+    if (!entry || typeof entry.pillar !== 'string') continue;
+
+    try {
+      if (entry.pillar === 'iron') {
+        const session = ironSessionFromEntry(entry);
+        if (session) sessions.push(session);
+      } else if (entry.pillar === 'combat') {
+        const session = combatSessionFromEntry(entry);
+        if (session) sessions.push(session);
+      } else if (entry.pillar === 'spirit') {
+        const session = spiritSessionFromEntry(entry);
+        if (session) sessions.push(session);
+      }
+    } catch {
+      continue;
     }
   }
   return sessions.sort((a, b) => b.timestamp - a.timestamp);
@@ -276,7 +295,8 @@ export function computeTrainingLoadSnapshot(
   const ironGoal = resolveIronGoalType(goalIron);
   const ironAcwrThresholds = resolveAcwrThresholds(goalIron);
 
-  const sessions = sessionsFromLogs(entries);
+  const safeEntries = Array.isArray(entries) ? entries : [];
+  const sessions = sessionsFromLogs(safeEntries);
   const iron = buildPillarMetrics('iron', sessions, ironAcwrThresholds, now);
   const combat = buildPillarMetrics('combat', sessions, COMBAT_ACWR_THRESHOLDS, now);
   const spirit = buildPillarMetrics('spirit', sessions, COMBAT_ACWR_THRESHOLDS, now);
@@ -391,6 +411,9 @@ export function yesterdayEffectiveRpe(
   entries: PerformanceLogEntry[],
   now = Date.now(),
 ): { rpe: number | null; pillar: WorkoutPillarLog | null } {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return { rpe: null, pillar: null };
+  }
   const yesterdayKey = dateKey(new Date(now - MS_PER_DAY).toISOString());
   const sessions = sessionsFromLogs(entries).filter(
     (session) => dateKey(new Date(session.timestamp).toISOString()) === yesterdayKey,

@@ -1,7 +1,7 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, ScrollView, Text, View } from 'react-native';
 import Animated, {
   Easing,
   interpolateColor,
@@ -244,7 +244,7 @@ export default function CombatModeScreen() {
   return (
     <Animated.View style={[{ flex: 1 }, arenaStyle]}>
       <StatusBar style="light" />
-      <SafeAreaView className="flex-1 px-5 pb-6 pt-2">
+      <SafeAreaView className="flex-1 px-4 pb-4 pt-2">
         <Pressable
           onPress={() => router.back()}
           accessibilityRole="button"
@@ -256,12 +256,12 @@ export default function CombatModeScreen() {
           </Text>
         </Pressable>
 
-        <View className="mt-2 flex-row items-center justify-between">
-          <Text className="font-body text-[10px] uppercase tracking-[0.4em] text-matte-gold/80">
+        <View className="mt-2 min-w-0 flex-row flex-wrap items-start justify-between gap-2">
+          <Text className="flex-shrink whitespace-normal break-words font-body text-[10px] uppercase leading-5 tracking-[0.32em] text-matte-gold/80">
             Blood & Bone
           </Text>
           {sessionActive || phase === 'finished' ? (
-            <Text className="font-body text-[10px] uppercase tracking-[0.3em] text-[#8A9488]">
+            <Text className="shrink-0 font-body text-[10px] uppercase leading-5 tracking-[0.24em] text-[#8A9488]">
               {phase === 'finished'
                 ? 'Complete'
                 : isResting
@@ -294,16 +294,15 @@ export default function CombatModeScreen() {
                           : 'border-white/10 bg-white/[0.03]'
                     }`}
                   >
-                    <Text className="font-body text-[9px] uppercase tracking-[0.25em] text-[#6B7568]">
+                    <Text className="flex-shrink whitespace-normal break-words font-body text-[9px] uppercase leading-4 tracking-[0.2em] text-[#6B7568]">
                       Round {roundNumber}
                     </Text>
                     <Text
-                      className="mt-1 font-body-medium text-xs text-[#E8E4DC]"
-                      numberOfLines={2}
+                      className="mt-1 flex-shrink whitespace-normal break-words font-body-medium text-xs leading-5 text-[#E8E4DC]"
                     >
                       {item.combo.name}
                     </Text>
-                    <Text className="mt-1 font-body text-[9px] leading-4 text-[#8A9488]" numberOfLines={2}>
+                    <Text className="mt-1 flex-shrink whitespace-normal break-words font-body text-[9px] leading-4 text-[#8A9488]">
                       {comboCalloutFull(item.combo)}
                     </Text>
                   </View>
@@ -313,7 +312,11 @@ export default function CombatModeScreen() {
           </View>
         ) : null}
 
-        <View className="flex-1 justify-between pt-6">
+        <ScrollView
+          className="flex-1"
+          contentContainerClassName="gap-6 pb-4 pt-6"
+          showsVerticalScrollIndicator={false}
+        >
           <View className="items-center">
             {phase === 'idle' ? (
               <CombatTimerPreview seconds={workSeconds} />
@@ -325,28 +328,28 @@ export default function CombatModeScreen() {
               />
             )}
             {sessionActive ? (
-              <Text className="mt-3 font-body text-xs uppercase tracking-[0.45em] text-[#8A9488]">
+              <Text className="mt-3 text-center font-body text-xs uppercase leading-5 tracking-[0.34em] text-[#8A9488]">
                 {isResting ? 'Recovery' : isRunning ? 'Work' : 'Paused'}
               </Text>
             ) : phase === 'idle' ? (
-              <Text className="mt-3 font-body text-xs uppercase tracking-[0.35em] text-[#6B7568]">
+              <Text className="mt-3 flex-shrink whitespace-normal break-words text-center font-body text-xs uppercase leading-5 tracking-[0.26em] text-[#6B7568]">
                 {totalRounds} rounds · {formatTimer(workSeconds)} work /{' '}
                 {formatTimer(restSeconds)} rest
               </Text>
             ) : null}
           </View>
 
-          <View className="min-h-[140px] flex-1 justify-center px-1">
+          <View className="min-w-0 px-1">
             {phase === 'finished' ? (
-              <Text className="text-center font-body-medium text-xl uppercase tracking-[0.2em] text-[#E8E4DC]">
+              <Text className="text-center font-body-medium text-xl uppercase leading-8 tracking-[0.16em] text-[#E8E4DC]">
                 Session complete
               </Text>
             ) : phase === 'rest' ? (
               <View className="items-center gap-3">
-                <Text className="font-body-medium text-3xl uppercase tracking-[0.35em] text-[#E8E4DC]">
+                <Text className="text-center font-body-medium text-3xl uppercase leading-10 tracking-[0.28em] text-[#E8E4DC]">
                   Rest
                 </Text>
-                <Text className="font-body text-sm text-[#8A9488]">
+                <Text className="text-center font-body text-sm leading-6 text-[#8A9488]">
                   Round {currentRound}/{totalRounds} recovery
                 </Text>
               </View>
@@ -361,17 +364,17 @@ export default function CombatModeScreen() {
                   tacticalFocus={activeTacticalFocus}
                 />
                 {phase === 'work' && comboCallout ? (
-                  <Text className="text-center font-body text-sm uppercase tracking-[0.2em] text-matte-gold/75">
+                  <Text className="flex-shrink whitespace-normal break-words text-center font-body text-sm uppercase leading-6 tracking-[0.16em] text-matte-gold/75">
                     Now · {comboCallout}
                   </Text>
                 ) : null}
                 {activeCoachIntent && sessionActive ? (
-                  <Text className="font-body text-sm leading-5 text-[#8A9488]">
+                  <Text className="flex-shrink whitespace-normal break-words font-body text-sm leading-5 text-[#8A9488]">
                     {activeCoachIntent}
                   </Text>
                 ) : null}
                 {phase === 'idle' && (activeBlock?.combat?.rounds_structure?.length ?? 0) > 0 ? (
-                  <Text className="font-body text-[10px] uppercase tracking-[0.35em] text-matte-gold/60">
+                  <Text className="flex-shrink whitespace-normal break-words font-body text-[10px] uppercase leading-5 tracking-[0.22em] text-matte-gold/60">
                     {(activeBlock?.combat?.rounds_structure ?? [])
                       .map((segment) => {
                         const range =
@@ -384,13 +387,13 @@ export default function CombatModeScreen() {
                   </Text>
                 ) : null}
                 {phase === 'idle' ? (
-                  <Text className="font-body text-sm text-[#6B7568]">
+                  <Text className="flex-shrink whitespace-normal break-words font-body text-sm leading-6 text-[#6B7568]">
                     {title ?? 'Blood & Bone'}
                   </Text>
                 ) : null}
               </CommandCenterShell>
             ) : (
-              <Text className="text-center font-body text-sm text-[#8A9488]">
+              <Text className="text-center font-body text-sm leading-6 text-[#8A9488]">
                 Loading combo from catalog…
               </Text>
             )}
@@ -409,7 +412,7 @@ export default function CombatModeScreen() {
                 disabled={catalogLoading || !scheduleReady}
                 className="rounded-2xl border border-matte-gold/35 bg-matte-gold/10 px-6 py-5 active:opacity-80"
               >
-                <Text className="text-center font-body-medium text-sm uppercase tracking-[0.35em] text-matte-gold">
+                <Text className="flex-shrink whitespace-normal break-words text-center font-body-medium text-sm uppercase leading-6 tracking-[0.28em] text-matte-gold">
                   Begin Rounds
                 </Text>
               </Pressable>
@@ -423,7 +426,7 @@ export default function CombatModeScreen() {
                     : 'border-matte-gold/40 bg-matte-gold/12'
                 }`}
               >
-                <Text className="text-center font-body-medium text-sm uppercase tracking-[0.3em] text-matte-gold">
+                <Text className="flex-shrink whitespace-normal break-words text-center font-body-medium text-sm uppercase leading-6 tracking-[0.24em] text-matte-gold">
                   End Session & Sync
                 </Text>
               </Pressable>
@@ -434,13 +437,13 @@ export default function CombatModeScreen() {
                 onPress={() => syncAndAscend(rpe ?? DEFAULT_END_RPE)}
                 className="active:opacity-70"
               >
-                <Text className="text-center font-body text-[10px] uppercase tracking-[0.3em] text-[#6B7568]">
+                <Text className="flex-shrink whitespace-normal break-words text-center font-body text-[10px] uppercase leading-5 tracking-[0.24em] text-[#6B7568]">
                   Skip RPE · sync at {DEFAULT_END_RPE}
                 </Text>
               </Pressable>
             ) : null}
           </View>
-        </View>
+        </ScrollView>
       </SafeAreaView>
     </Animated.View>
   );

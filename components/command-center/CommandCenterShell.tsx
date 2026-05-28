@@ -19,14 +19,16 @@ export function CommandCenterShell({
   children,
 }: CommandCenterShellProps) {
   return (
-    <View className="gap-4 rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-4">
-      <View className="gap-1">
-        <Text className="font-body text-[10px] uppercase tracking-[0.4em] text-matte-gold/75">
+    <View className="min-w-0 gap-4 rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-4">
+      <View className="min-w-0 gap-1">
+        <Text className="flex-shrink font-body text-[10px] uppercase leading-5 tracking-[0.32em] text-matte-gold/75">
           {pillarLabel}
         </Text>
-        <Text className="font-display-bold text-2xl leading-8 text-[#E8E4DC]">{title}</Text>
+        <Text className="flex-shrink whitespace-normal break-words font-display-bold text-2xl leading-8 text-[#E8E4DC]">
+          {title}
+        </Text>
         {meta ? (
-          <Text className="font-body text-[10px] uppercase tracking-[0.28em] text-[#6B7568]">
+          <Text className="flex-shrink whitespace-normal break-words font-body text-[10px] uppercase leading-5 tracking-[0.22em] text-[#6B7568]">
             {meta}
           </Text>
         ) : null}

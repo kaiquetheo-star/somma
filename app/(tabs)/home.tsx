@@ -129,13 +129,15 @@ export default function DailyCommandScreen() {
     <SafeAreaView className="flex-1 bg-[#0F1512]">
       <ScrollView
         className="flex-1"
-        contentContainerClassName="px-8 pb-12 pt-8"
+        contentContainerClassName="px-5 pb-12 pt-8"
         showsVerticalScrollIndicator={false}
       >
-        <Text className="font-body text-[10px] uppercase tracking-[0.4em] text-matte-gold/70">
+        <Text className="flex-shrink whitespace-normal break-words font-body text-[10px] uppercase leading-5 tracking-[0.34em] text-matte-gold/70">
           The Sanctuary
         </Text>
-        <Text className="mt-3 font-display-bold text-3xl text-[#E8E4DC]">Daily Command</Text>
+        <Text className="mt-3 flex-shrink whitespace-normal break-words font-display-bold text-3xl leading-10 text-[#E8E4DC]">
+          Daily Command
+        </Text>
 
         <View className="mt-8 items-center">
           <AttunementOrbsPanel
@@ -166,13 +168,13 @@ export default function DailyCommandScreen() {
             ) : null}
 
             <View className="mt-10 gap-3">
-              <View className="flex-row items-end justify-between">
-                <View className="flex-1 pr-4">
-                  <Text className="font-body text-[10px] uppercase tracking-[0.35em] text-[#6B7568]">
+              <View className="min-w-0 flex-row flex-wrap items-start justify-between gap-3">
+                <View className="min-w-0 flex-1">
+                  <Text className="flex-shrink whitespace-normal break-words font-body text-[10px] uppercase leading-5 tracking-[0.28em] text-[#6B7568]">
                     {protocolHeading}
                   </Text>
                   {selectedDay?.focus_label ? (
-                    <Text className="mt-1 font-body text-xs text-[#8A9488]">
+                    <Text className="mt-1 flex-shrink whitespace-normal break-words font-body text-xs leading-5 text-[#8A9488]">
                       {selectedDay.focus_label}
                     </Text>
                   ) : null}
@@ -180,7 +182,7 @@ export default function DailyCommandScreen() {
                 {gameplanLoading || performanceSyncing ? (
                   <ActivityIndicator size="small" color="#BFA06A" />
                 ) : (
-                  <Text className="font-body text-xs text-matte-gold/80">
+                  <Text className="shrink-0 font-body text-xs leading-5 text-matte-gold/80">
                     {selectedDay?.is_rest_day
                       ? 'Recovery'
                       : `${completedCount}/${totalCount} complete`}
@@ -193,7 +195,7 @@ export default function DailyCommandScreen() {
 
               {performanceSyncing ? (
                 <View className="overflow-hidden rounded-2xl border border-matte-gold/20 bg-matte-gold/5 px-5 py-3">
-                  <Text className="font-body text-xs text-matte-gold/90">
+                  <Text className="flex-shrink whitespace-normal break-words font-body text-xs leading-5 text-matte-gold/90">
                     Integrating session · recalibrating protocol…
                   </Text>
                 </View>
@@ -201,13 +203,13 @@ export default function DailyCommandScreen() {
 
               {gameplanError ? (
                 <View className="overflow-hidden rounded-3xl border border-red-500/35 bg-red-950/30 px-6 py-8">
-                  <Text className="text-center font-body text-[10px] uppercase tracking-[0.35em] text-red-400/90">
+                  <Text className="text-center font-body text-[10px] uppercase leading-5 tracking-[0.28em] text-red-400/90">
                     Neural Link Failed
                   </Text>
-                  <Text className="mt-4 text-center font-display text-xl leading-8 text-[#E8C4C4]">
+                  <Text className="mt-4 flex-shrink whitespace-normal break-words text-center font-display text-xl leading-8 text-[#E8C4C4]">
                     Head Coach could not build your protocol locally.
                   </Text>
-                  <Text className="mt-2 text-center font-body text-sm leading-6 text-[#B89090]">
+                  <Text className="mt-2 flex-shrink whitespace-normal break-words text-center font-body text-sm leading-6 text-[#B89090]">
                     {gameplanError}
                   </Text>
                   <Pressable
@@ -220,7 +222,7 @@ export default function DailyCommandScreen() {
                     accessibilityLabel="Retry neural link"
                     className="mt-6 overflow-hidden rounded-2xl border border-red-400/40 bg-red-500/10 px-5 py-4 active:opacity-80"
                   >
-                    <Text className="text-center font-body-medium text-xs uppercase tracking-[0.3em] text-red-300">
+                    <Text className="text-center font-body-medium text-xs uppercase leading-5 tracking-[0.24em] text-red-300">
                       Re-establish link
                     </Text>
                   </Pressable>
@@ -229,7 +231,7 @@ export default function DailyCommandScreen() {
 
               {gameplanLoading && !weeklyMicrocycle && !gameplanError ? (
                 <View className="items-center py-12">
-                  <Text className="font-body text-sm text-[#8A9488]">
+                  <Text className="flex-shrink whitespace-normal break-words font-body text-sm leading-6 text-[#8A9488]">
                     Experts are arranging your ritual…
                   </Text>
                 </View>
@@ -237,13 +239,13 @@ export default function DailyCommandScreen() {
 
               {!gameplanError && selectedDay?.is_rest_day ? (
                 <View className="overflow-hidden rounded-3xl border border-white/8 bg-white/[0.03] px-6 py-10">
-                  <Text className="text-center font-body text-[10px] uppercase tracking-[0.35em] text-[#6B7568]">
+                  <Text className="text-center font-body text-[10px] uppercase leading-5 tracking-[0.28em] text-[#6B7568]">
                     Recovery phase
                   </Text>
-                  <Text className="mt-4 text-center font-display text-xl leading-8 text-[#C8C4BC]">
+                  <Text className="mt-4 flex-shrink whitespace-normal break-words text-center font-display text-xl leading-8 text-[#C8C4BC]">
                     Biochemical Recovery Phase.
                   </Text>
-                  <Text className="mt-2 text-center font-body text-sm leading-6 text-[#8A9488]">
+                  <Text className="mt-2 flex-shrink whitespace-normal break-words text-center font-body text-sm leading-6 text-[#8A9488]">
                     No intense protocols scheduled.
                   </Text>
                 </View>
@@ -266,10 +268,10 @@ export default function DailyCommandScreen() {
                 accessibilityLabel="Recalibrate weekly protocol"
                 className="mt-2 overflow-hidden rounded-2xl border border-white/10 bg-white/5 px-5 py-4 active:opacity-80"
               >
-                <Text className="font-body-medium text-xs uppercase tracking-[0.3em] text-[#8A9488]">
+                <Text className="flex-shrink whitespace-normal break-words font-body-medium text-xs uppercase leading-5 tracking-[0.24em] text-[#8A9488]">
                   Recalibrate
                 </Text>
-                <Text className="mt-1 font-body text-xs text-[#6B7568]">
+                <Text className="mt-1 flex-shrink whitespace-normal break-words font-body text-xs leading-5 text-[#6B7568]">
                   Rebuild this week&apos;s microcycle on-device
                 </Text>
               </Pressable>
@@ -278,7 +280,7 @@ export default function DailyCommandScreen() {
         ) : (
           <View className="mt-10 items-center py-12">
             <ActivityIndicator color="#BFA06A" />
-            <Text className="mt-4 font-body text-sm text-[#8A9488]">
+            <Text className="mt-4 flex-shrink whitespace-normal break-words text-center font-body text-sm leading-6 text-[#8A9488]">
               Building your local protocol…
             </Text>
           </View>

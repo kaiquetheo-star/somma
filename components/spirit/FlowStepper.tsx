@@ -19,8 +19,8 @@ interface FlowStepperProps {
 export function FlowStepper({ catalogRow, poseMeta, holdLabel }: FlowStepperProps) {
   if (!catalogRow) {
     return (
-      <View className="gap-3 rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-4">
-        <Text className="font-body text-sm leading-6 text-[#8A9488]">
+      <View className="min-w-0 gap-3 rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-4">
+        <Text className="flex-shrink whitespace-normal break-words font-body text-sm leading-6 text-[#8A9488]">
           Flow catalog cue pending — hold posture with nasal breath until the next pose.
         </Text>
       </View>
@@ -31,22 +31,22 @@ export function FlowStepper({ catalogRow, poseMeta, holdLabel }: FlowStepperProp
   const instructions = flowSpiritInstructions(catalogRow);
 
   return (
-    <View className="gap-4">
-      <View className="gap-1">
+    <View className="min-w-0 gap-4">
+      <View className="min-w-0 gap-1">
         {sanskritName ? (
-          <Text className="font-display-bold text-xl leading-7 text-matte-gold/90">
+          <Text className="flex-shrink whitespace-normal break-words font-display-bold text-xl leading-7 text-matte-gold/90">
             {sanskritName}
           </Text>
         ) : null}
         <Text
-          className={`font-display-bold leading-8 text-[#E8E4DC] ${
+          className={`flex-shrink whitespace-normal break-words font-display-bold leading-8 text-[#E8E4DC] ${
             sanskritName ? 'text-lg' : 'text-2xl'
           }`}
         >
           {englishName}
         </Text>
         {poseMeta || holdLabel ? (
-          <Text className="font-body text-[10px] uppercase tracking-[0.28em] text-[#6B7568]">
+          <Text className="flex-shrink whitespace-normal break-words font-body text-[10px] uppercase leading-5 tracking-[0.22em] text-[#6B7568]">
             {[poseMeta, holdLabel ? `${holdLabel} hold` : null].filter(Boolean).join(' · ')}
           </Text>
         ) : null}
@@ -58,7 +58,7 @@ export function FlowStepper({ catalogRow, poseMeta, holdLabel }: FlowStepperProp
       />
 
       {catalogRow.is_dynamic_flow ? (
-        <Text className="font-body text-[10px] uppercase tracking-[0.32em] text-[#6B7568]">
+        <Text className="flex-shrink whitespace-normal break-words font-body text-[10px] uppercase leading-5 tracking-[0.26em] text-[#6B7568]">
           Dynamic flow · breath-linked movement
         </Text>
       ) : null}

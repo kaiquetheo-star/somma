@@ -1,7 +1,7 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -240,36 +240,41 @@ export default function SpiritModeScreen() {
       <StatusBar style="light" />
       <View style={styles.canvas}>
         <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-          <Pressable
-            onPress={() => router.back()}
-            style={styles.exitHit}
-            accessibilityLabel="Exit sanctuary"
+          <ScrollView
+            style={styles.scroll}
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
           >
-            <Text style={styles.exitText}>Exit</Text>
-          </Pressable>
+            <Pressable
+              onPress={() => router.back()}
+              style={styles.exitHit}
+              accessibilityLabel="Exit sanctuary"
+            >
+              <Text style={styles.exitText}>Exit</Text>
+            </Pressable>
 
-          <FlowGestureZones
-            enabled={showFlowActive}
-            canGoPrev={flowSession.canGoPrev}
-            onPrev={flowSession.goPrev}
-            onNext={flowSession.goNext}
-          >
-            <View style={styles.orbStage}>
-              {isFlowMode ? (
-                <SanctuaryBreathOrb
-                  inhaleSeconds={breathCadence.inhaleSeconds}
-                  exhaleSeconds={breathCadence.exhaleSeconds}
-                  isActive={showFlowActive}
-                />
-              ) : (
-                <SanctuaryBreathOrb
-                  inhaleSeconds={prescribedTempo.inhale}
-                  exhaleSeconds={prescribedTempo.exhale}
-                  isActive={breathEngine.status === 'running'}
-                />
-              )}
-            </View>
-          </FlowGestureZones>
+            <FlowGestureZones
+              enabled={showFlowActive}
+              canGoPrev={flowSession.canGoPrev}
+              onPrev={flowSession.goPrev}
+              onNext={flowSession.goNext}
+            >
+              <View style={styles.orbStage}>
+                {isFlowMode ? (
+                  <SanctuaryBreathOrb
+                    inhaleSeconds={breathCadence.inhaleSeconds}
+                    exhaleSeconds={breathCadence.exhaleSeconds}
+                    isActive={showFlowActive}
+                  />
+                ) : (
+                  <SanctuaryBreathOrb
+                    inhaleSeconds={prescribedTempo.inhale}
+                    exhaleSeconds={prescribedTempo.exhale}
+                    isActive={breathEngine.status === 'running'}
+                  />
+                )}
+              </View>
+            </FlowGestureZones>
 
           {isFlowMode && (showFlowIdle || showFlowActive) ? (
             <View style={styles.commandCenterRail}>
@@ -317,7 +322,6 @@ export default function SpiritModeScreen() {
                     >
                       <Text
                         style={[styles.sequenceChipName, isCurrent ? styles.sequenceChipNameActive : null]}
-                        numberOfLines={2}
                       >
                         {item.name}
                       </Text>
@@ -363,8 +367,8 @@ export default function SpiritModeScreen() {
             </Pressable>
           ) : null}
 
-          {(showFlowActive || showBreathActive) && (
-            <View style={styles.footer} pointerEvents="none">
+            {(showFlowActive || showBreathActive) && (
+              <View style={styles.footer} pointerEvents="none">
               {isFlowMode && flowSession.currentAsana ? (
                 <>
                   <Text style={styles.holdTimer}>
@@ -381,8 +385,9 @@ export default function SpiritModeScreen() {
                   {breathEngine.phase} · {formatSpiritTimer(breathEngine.secondsLeft)}
                 </Text>
               )}
-            </View>
-          )}
+              </View>
+            )}
+          </ScrollView>
         </SafeAreaView>
       </View>
     </GestureHandlerRootView>
@@ -401,11 +406,18 @@ const styles = StyleSheet.create({
   safe: {
     flex: 1,
   },
-  exitHit: {
+  scroll: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
     paddingHorizontal: 20,
+    paddingBottom: 28,
+    gap: 18,
+  },
+  exitHit: {
     paddingVertical: 8,
     alignSelf: 'flex-start',
-    zIndex: 30,
   },
   exitText: {
     fontFamily: 'Inter_400Regular',
@@ -415,35 +427,18 @@ const styles = StyleSheet.create({
     color: SPIRIT_SANCTUARY.textMuted,
   },
   orbStage: {
-    flex: 1,
+    minHeight: 220,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  movementVisualStage: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: '18%',
-    alignItems: 'center',
-    gap: 16,
-    zIndex: 20,
-  },
-  movementBlueprintName: {
-    marginTop: 4,
-    paddingHorizontal: 28,
-    textAlign: 'center',
-    fontFamily: 'PlayfairDisplay_600SemiBold',
-    fontSize: 20,
-    lineHeight: 28,
-    color: '#E8E4DC',
-  },
   enterSanctuary: {
-    position: 'absolute',
-    left: 32,
-    right: 32,
-    bottom: '28%',
     alignItems: 'center',
-    zIndex: 25,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(191, 160, 106, 0.28)',
+    backgroundColor: 'rgba(191, 160, 106, 0.06)',
+    paddingHorizontal: 18,
+    paddingVertical: 18,
   },
   enterLabel: {
     fontFamily: 'Inter_500Medium',
@@ -451,6 +446,8 @@ const styles = StyleSheet.create({
     letterSpacing: 4,
     textTransform: 'uppercase',
     color: 'rgba(191, 160, 106, 0.75)',
+    textAlign: 'center',
+    flexShrink: 1,
   },
   enterHint: {
     marginTop: 16,
@@ -459,7 +456,8 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     textAlign: 'center',
     color: SPIRIT_SANCTUARY.textMuted,
-    maxWidth: 300,
+    alignSelf: 'stretch',
+    flexShrink: 1,
   },
   poseMeta: {
     marginTop: 12,
@@ -468,28 +466,21 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
     textTransform: 'uppercase',
     color: SPIRIT_SANCTUARY.textMuted,
+    textAlign: 'center',
+    flexShrink: 1,
   },
   sequenceRail: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 56,
-    zIndex: 20,
+    marginHorizontal: -20,
   },
   commandCenterRail: {
-    position: 'absolute',
-    left: 20,
-    right: 20,
-    bottom: '22%',
-    zIndex: 25,
-    maxHeight: '42%',
+    minWidth: 0,
   },
   sequenceContent: {
     paddingHorizontal: 20,
     gap: 10,
   },
   sequenceChip: {
-    width: 148,
+    width: 156,
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 14,
@@ -506,6 +497,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     color: SPIRIT_SANCTUARY.textMuted,
+    flexShrink: 1,
   },
   sequenceChipNameActive: {
     color: SPIRIT_SANCTUARY.textPrimary,
@@ -517,18 +509,11 @@ const styles = StyleSheet.create({
     letterSpacing: 1.5,
     textTransform: 'uppercase',
     color: 'rgba(107, 117, 104, 0.75)',
+    flexShrink: 1,
   },
   footer: {
-    paddingHorizontal: 28,
     paddingBottom: 12,
     alignItems: 'center',
-  },
-  asanaName: {
-    fontFamily: 'Inter_400Regular',
-    fontSize: 15,
-    letterSpacing: 1.2,
-    color: SPIRIT_SANCTUARY.textPrimary,
-    textAlign: 'center',
   },
   holdTimer: {
     marginTop: 10,
@@ -544,6 +529,8 @@ const styles = StyleSheet.create({
     letterSpacing: 3,
     textTransform: 'uppercase',
     color: SPIRIT_SANCTUARY.textMuted,
+    textAlign: 'center',
+    flexShrink: 1,
   },
   gestureHint: {
     marginTop: 14,
@@ -552,5 +539,7 @@ const styles = StyleSheet.create({
     letterSpacing: 2.5,
     textTransform: 'uppercase',
     color: 'rgba(107, 117, 104, 0.55)',
+    textAlign: 'center',
+    flexShrink: 1,
   },
 });

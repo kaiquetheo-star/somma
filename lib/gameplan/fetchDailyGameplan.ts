@@ -2,12 +2,12 @@
 import { fetchLibraryExercises } from '@/lib/catalog/library';
 import { applyNeuroMechanicalOrderingToMicrocycle } from '@/lib/gameplan/engine/clinicalLaws';
 import { generateDeterministicGameplan } from '@/lib/gameplan/engine/generateDeterministicGameplan';
-import { getMicrocycleDay, getTodayDayIndex } from '@/lib/gameplan/microcycleWeek';
+import { getMicrocycleDay, getTodayDayIndex, getWeekStartMonday } from '@/lib/gameplan/microcycleWeek';
 import { GameplanFetchError } from '@/lib/gameplan/gameplanErrors';
 import { assessMicrocycleHealth } from '@/lib/gameplan/microcycleValidation';
-import { deriveTrainingDaysFromFrequencies } from '@/types/biological';
+import { deriveTrainingDaysFromFrequencies, isBiologicalProfileComplete } from '@/types/biological';
 import type { BiologicalProfile } from '@/types/biological';
-import type { DailyGameplan } from '@/types/gameplan';
+import type { DailyGameplan, MicrocycleDay } from '@/types/gameplan';
 import type { PerformanceLogEntry } from '@/types/performance';
 import type { FocusPreference, EquipmentTag, UserStats } from '@/store/useSommaStore';
 
@@ -41,6 +41,8 @@ export interface FetchDailyGameplanInput {
   biological: BiologicalProfile;
   userStats: UserStats;
   performanceLogs: PerformanceLogEntry[];
+  /** Metabolic Steering: true when 2+ consecutive deficit days detected */
+  glycogenDepleted?: boolean;
 }
 
 export interface FetchDailyGameplanResult {
@@ -50,7 +52,33 @@ export interface FetchDailyGameplanResult {
 }
 
 /**
+ * Build a safe empty-week blueprint when the engine cannot produce a real protocol.
+ * This prevents the UI from freezing and gives the user a functional (if empty) state.
+ */
+function buildSafeFallbackGameplan(trainingDaysPerWeek: number): DailyGameplan {
+  const today = new Date().toISOString().slice(0, 10);
+  const weekStart = getWeekStartMonday(today);
+  const microcycle: MicrocycleDay[] = Array.from({ length: 7 }, (_, i) => ({
+    day_index: i + 1,
+    is_rest_day: true,
+    focus_label: 'Recovery — awaiting calibration',
+    date: today,
+    blocks: [],
+  }));
+
+  return {
+    date: today,
+    week_start_date: weekStart,
+    training_days_per_week: trainingDaysPerWeek,
+    microcycle,
+    blocks: [],
+    generated_at: new Date().toISOString(),
+  };
+}
+
+/**
  * Local-first Head Coach — deterministic engine only ($0 API, no cloud).
+ * Falls back to a safe empty blueprint if biological data is unhydrated or the engine throws.
  */
 export async function fetchDailyGameplan({
   focus,
@@ -58,8 +86,14 @@ export async function fetchDailyGameplan({
   biological,
   userStats,
   performanceLogs,
+  glycogenDepleted,
 }: FetchDailyGameplanInput): Promise<FetchDailyGameplanResult> {
   const trainingDaysPerWeek = deriveTrainingDaysFromFrequencies(biological);
+
+  if (!isBiologicalProfileComplete(biological)) {
+    console.warn('[SOMMA] Biological profile incomplete/unhydrated — returning safe fallback');
+    return { gameplan: buildSafeFallbackGameplan(trainingDaysPerWeek), source: 'fallback', fromCache: false };
+  }
 
   try {
     console.log('[SOMMA] Local deterministic Head Coach — device-only path');
@@ -69,6 +103,7 @@ export async function fetchDailyGameplan({
       biological,
       userStats,
       performanceLogs,
+      glycogenDepleted,
     });
     const gameplan = await finalizeGameplanOrdering(generated);
 
@@ -78,9 +113,7 @@ export async function fetchDailyGameplan({
     return { gameplan, source: 'local', fromCache: false };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Local generation failed';
-    console.error('[SOMMA] Local Head Coach failed:', message);
-    throw new GameplanFetchError(message, {
-      code: message.startsWith('INSUFFICIENT_CATALOG') ? 'INSUFFICIENT_CATALOG' : 'GENERATION_FAILED',
-    });
+    console.error('[SOMMA] Local Head Coach failed:', message, '— returning safe fallback');
+    return { gameplan: buildSafeFallbackGameplan(trainingDaysPerWeek), source: 'fallback', fromCache: false };
   }
 }

@@ -102,7 +102,7 @@ export function SanctuaryBreathOrb({
   );
 }
 
-const ORB_SIZE = 200;
+const ORB_SIZE = 160;
 
 const styles = StyleSheet.create({
   container: {

@@ -35,6 +35,7 @@ export const DEFAULT_LOCAL_BIOLOGICAL: BiologicalProfile = {
   goal_flow: 'Active recovery',
   goal_spirit: 'Nervous system recovery',
   training_days_per_week: DEFAULT_TRAINING_DAYS_PER_WEEK,
+  experience_level: 'beginner',
   available_time_iron: DEFAULT_AVAILABLE_TIME_IRON,
   available_time_combat: DEFAULT_AVAILABLE_TIME_COMBAT,
   available_time_spirit: DEFAULT_AVAILABLE_TIME_SPIRIT,
@@ -44,6 +45,8 @@ export const DEFAULT_LOCAL_BIOLOGICAL: BiologicalProfile = {
   mesocycle_week: 1,
   cns_fatigue_score: 0,
   clinical_exit_interview: null,
+  current_body_fat_estimate: null,
+  target_archetype: null,
 };
 
 export function defaultLocalFocusPreference(): FocusPreference {

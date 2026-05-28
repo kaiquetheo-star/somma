@@ -1,11 +1,11 @@
-import { Text, TextInput, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 
 import { PillarGoalSelect } from '@/components/foundation/PillarGoalSelect';
 import { webTextInputProps } from '@/lib/ux/webTextInput';
 import { TrainingFrequencySelect } from '@/components/foundation/TrainingFrequencySelect';
 import { ValueStepper } from '@/components/iron/ValueStepper';
 import { RpeSelector } from '@/components/combat/RpeSelector';
-import type { BiologicalProfile, PillarGoalKey } from '@/types/biological';
+import { TARGET_ARCHETYPE_OPTIONS, type BiologicalProfile, type PillarGoalKey, type TargetArchetype } from '@/types/biological';
 
 interface BiologicalPassportFormProps {
   value: BiologicalProfile;
@@ -118,6 +118,63 @@ export function BiologicalPassportForm({ value, onChange }: BiologicalPassportFo
         value={value.training_days_per_week}
         onChange={(training_days_per_week) => onChange({ training_days_per_week })}
       />
+
+      <View className="gap-2">
+        <Text className="font-body text-[10px] uppercase tracking-[0.35em] text-[#6B7568]">
+          Current body fat estimate % (for timeline)
+        </Text>
+        <TextInput
+          value={
+            value.current_body_fat_estimate != null ? String(value.current_body_fat_estimate) : ''
+          }
+          onChangeText={(text) => {
+            const trimmed = text.trim();
+            if (!trimmed) {
+              onChange({ current_body_fat_estimate: null });
+              return;
+            }
+            const parsed = Number.parseFloat(trimmed);
+            onChange({
+              current_body_fat_estimate: Number.isFinite(parsed) && parsed > 0 && parsed <= 60 ? parsed : null,
+            });
+          }}
+          placeholder="e.g. 20"
+          placeholderTextColor="#4A5D44"
+          keyboardType="decimal-pad"
+          className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 font-body text-base text-[#E8E4DC]"
+        />
+      </View>
+
+      <View className="gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-5">
+        <Text className="font-body text-[10px] uppercase tracking-[0.35em] text-matte-gold/70">
+          Shape archetype
+        </Text>
+        <Text className="font-body text-xs leading-5 text-[#6B7568]">
+          Steers volume allocation and calculates your natural target timeline.
+        </Text>
+        {TARGET_ARCHETYPE_OPTIONS.map((option) => (
+          <Pressable
+            key={option.id}
+            onPress={() => onChange({ target_archetype: option.id as TargetArchetype })}
+            accessibilityRole="button"
+            accessibilityLabel={`Select ${option.label}`}
+            className={`rounded-xl border px-4 py-3 ${
+              value.target_archetype === option.id
+                ? 'border-matte-gold/50 bg-matte-gold/10'
+                : 'border-white/10 bg-white/[0.02] active:opacity-80'
+            }`}
+          >
+            <Text
+              className={`font-body-medium text-sm ${
+                value.target_archetype === option.id ? 'text-matte-gold' : 'text-[#E8E4DC]'
+              }`}
+            >
+              {option.label}
+            </Text>
+            <Text className="mt-1 font-body text-xs text-[#6B7568]">{option.description}</Text>
+          </Pressable>
+        ))}
+      </View>
 
       <View className="gap-6 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-5">
         <Text className="font-body text-[10px] uppercase tracking-[0.35em] text-matte-gold/70">

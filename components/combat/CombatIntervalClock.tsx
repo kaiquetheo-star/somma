@@ -72,15 +72,15 @@ export function CombatIntervalClock({
       style={[
         {
           fontFamily: mono,
-          fontSize: 88,
-          lineHeight: 96,
+          fontSize: 72,
+          lineHeight: 80,
           fontWeight: '600',
           color: '#E8E4DC',
           textAlign: 'center',
           padding: 0,
           margin: 0,
           width: '100%',
-          letterSpacing: 4,
+          letterSpacing: 2,
         },
         style,
       ]}
@@ -105,15 +105,15 @@ export function CombatTimerPreview({ seconds, style }: { seconds: number; style?
       style={[
         {
           fontFamily: mono,
-          fontSize: 88,
-          lineHeight: 96,
+          fontSize: 72,
+          lineHeight: 80,
           fontWeight: '600',
           color: '#E8E4DC',
           textAlign: 'center',
           padding: 0,
           margin: 0,
           width: '100%',
-          letterSpacing: 4,
+          letterSpacing: 2,
         },
         style,
       ]}

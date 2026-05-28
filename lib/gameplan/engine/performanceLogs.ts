@@ -25,46 +25,56 @@ export interface EnginePerformanceRow {
 }
 
 export function flattenPerformanceLogs(entries: PerformanceLogEntry[]): EnginePerformanceRow[] {
+  if (!Array.isArray(entries)) return [];
+
   const rows: EnginePerformanceRow[] = [];
 
   for (const entry of entries) {
-    if (entry.pillar === 'iron' && entry.iron?.sets.length) {
-      const lastSet = entry.iron.sets[entry.iron.sets.length - 1];
-      const lastRpe = lastSet ? effectiveRpeFromSet(lastSet) : null;
-      rows.push({
-        pillar: 'iron',
-        exercise_id: entry.iron.exercise_id,
-        weight_used: lastSet?.weight_kg ?? null,
-        reps_completed: lastSet?.reps ?? null,
-        rpe_score: lastRpe,
-        timestamp: entry.timestamp,
-        payload: {
-          iron: {
-            exercise_id: entry.iron.exercise_id,
-            sets: entry.iron.sets.map((set) => ({
-              weight_kg: set.weight_kg,
-              reps: set.reps,
-              reported_rir: set.reported_rir ?? set.rir ?? null,
-              target_rir: set.target_rir ?? null,
-            })),
-          },
-        },
-      });
-      continue;
-    }
+    try {
+      if (!entry || typeof entry.pillar !== 'string' || typeof entry.timestamp !== 'string') {
+        continue;
+      }
 
-    if (entry.pillar === 'combat' || entry.pillar === 'spirit') {
-      rows.push({
-        pillar: entry.pillar,
-        exercise_id: null,
-        weight_used: null,
-        reps_completed: null,
-        rpe_score: entry.combat?.rpe_score ?? null,
-        timestamp: entry.timestamp,
-        payload: entry.combat
-          ? { volume: (entry.combat.rounds?.length ?? 0) * 180 }
-          : null,
-      });
+      if (entry.pillar === 'iron' && entry.iron?.sets?.length) {
+        const lastSet = entry.iron.sets[entry.iron.sets.length - 1];
+        const lastRpe = lastSet ? effectiveRpeFromSet(lastSet) : null;
+        rows.push({
+          pillar: 'iron',
+          exercise_id: entry.iron.exercise_id,
+          weight_used: lastSet?.weight_kg ?? null,
+          reps_completed: lastSet?.reps ?? null,
+          rpe_score: lastRpe,
+          timestamp: entry.timestamp,
+          payload: {
+            iron: {
+              exercise_id: entry.iron.exercise_id,
+              sets: entry.iron.sets.map((set) => ({
+                weight_kg: set.weight_kg,
+                reps: set.reps,
+                reported_rir: set.reported_rir ?? set.rir ?? null,
+                target_rir: set.target_rir ?? null,
+              })),
+            },
+          },
+        });
+        continue;
+      }
+
+      if (entry.pillar === 'combat' || entry.pillar === 'spirit') {
+        rows.push({
+          pillar: entry.pillar,
+          exercise_id: null,
+          weight_used: null,
+          reps_completed: null,
+          rpe_score: entry.combat?.rpe_score ?? null,
+          timestamp: entry.timestamp,
+          payload: entry.combat
+            ? { volume: (entry.combat.rounds?.length ?? 0) * 180 }
+            : null,
+        });
+      }
+    } catch {
+      continue;
     }
   }
 
